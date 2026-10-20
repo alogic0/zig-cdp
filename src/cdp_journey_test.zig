@@ -25,6 +25,42 @@ test "browser cleanup preserves an unrelated child" {
     try std.testing.expect(try peer.poll() == null);
 }
 
+test "saved profile uses the startup tab and survives workspace cleanup" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var random: [12]u8 = undefined;
+    io.random(&random);
+    const profile = try a.print("/tmp/cdp-saved-test-{s}", .{std.fmt.bytesToHex(random, .lower)});
+    try std.Io.Dir.cwd().createDir(io, profile, .fromMode(0o700));
+    defer std.Io.Dir.cwd().deleteTree(io, profile) catch {};
+    const marker = try a.print("{s}/keep", .{profile});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "caller data" });
+    const browser = try J.Browser.startWithOptions(a, io, .{ .user_data_dir = profile });
+    defer browser.stop();
+    const targets = try browser.client.listTargets();
+    var startup: []const u8 = "";
+    for (targets) |target| {
+        if (std.mem.eql(u8, target.target_type, "page") and std.mem.eql(u8, target.url, "about:blank")) startup = target.id;
+    }
+    try std.testing.expect(startup.len > 0);
+    const isolated = try browser.page(&.{});
+    defer isolated.close();
+    const saved = try browser.profilePage(&.{});
+    defer saved.close();
+    try std.testing.expectEqualStrings(startup, saved.target);
+    try std.testing.expect(!std.mem.eql(u8, saved.target, isolated.target));
+    saved.close();
+    isolated.close();
+    browser.stop();
+    browser.stop();
+    try std.testing.expect(browser.child.pid == null);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, browser.workspace, .{}));
+    const data = try std.Io.Dir.cwd().readFileAlloc(io, marker, a, .limited(100));
+    try std.testing.expectEqualStrings("caller data", data);
+}
+
 test "raw evaluation escapes controls and parsed replies own their strings" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

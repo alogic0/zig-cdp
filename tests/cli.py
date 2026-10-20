@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
 
 EXE = str(Path(sys.argv[1]).resolve())
 
@@ -46,7 +47,7 @@ class Session:
     def done(self):
         assert self.process.wait(timeout=10) == 0
         assert not self.path.exists(), self.path
-        assert not Path(self.ready["profile"]).exists(), self.ready
+        assert Path(self.ready["profile"]).is_dir() == self.ready["persistent_profile"], self.ready
         assert not Path(f'/proc/{self.ready["pid"]}').exists(), self.ready
 
     def abort(self):
@@ -74,6 +75,11 @@ def raw_request(session, payload):
         sock.sendall(payload)
         with sock.makefile("rb") as reader:
             return json.loads(reader.readline())
+
+
+def page_targets(server):
+    with urllib.request.urlopen(f'http://127.0.0.1:{server.ready["port"]}/json/list', timeout=5) as reply:
+        return [target for target in json.load(reply) if target["type"] == "page"]
 
 
 class Fixture(http.server.BaseHTTPRequestHandler):
@@ -208,6 +214,66 @@ def main():
         assert command(failure, "serve", "--browser", "/bin/false", ok=False) == "BrowserExited"
         assert not failure.exists()
         print("Existing-directory preservation and launch-failure cleanup: passed", flush=True)
+
+        profile = root / "saved-profile"
+        profile.mkdir()
+        marker = profile / "keep"
+        marker.write_text("caller-owned")
+        # These names are caller data too; download staging must be elsewhere.
+        (profile / "downloads").mkdir()
+        (profile / "downloads" / "keep").write_text("saved download")
+        with Session(root / "unrelated") as peer:
+            stale_endpoint = (Path(peer.ready["profile"]) / "DevToolsActivePort").read_bytes()
+            (profile / "DevToolsActivePort").write_bytes(stale_endpoint)
+            for executable, error in (("/no/such/browser", "FileNotFound"), ("/bin/false", "BrowserExited")):
+                assert command(failure, "serve", "--user-data-dir", str(profile), "--browser", executable, ok=False) == error
+                assert not failure.exists()
+                assert marker.read_text() == "caller-owned"
+                assert (profile / "DevToolsActivePort").read_bytes() == stale_endpoint
+                assert command(peer.path, "eval", "6*7") == 42
+
+            with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fixture) as fixture_server:
+                thread = threading.Thread(target=fixture_server.serve_forever, daemon=True)
+                thread.start()
+                origin = f"http://127.0.0.1:{fixture_server.server_port}"
+                try:
+                    for index in range(2):
+                        with Session(root / f"saved-{index}", "--user-data-dir", str(profile), "--allow", origin) as server:
+                            assert server.ready["profile"] == str(profile)
+                            assert server.ready["persistent_profile"] is True
+                            assert server.ready["port"] != peer.ready["port"]
+                            assert len(page_targets(server)) == 1, page_targets(server)
+                            assert command(failure, "serve", "--user-data-dir", str(profile), ok=False) == "ProfileInUse"
+                            assert not failure.exists()
+                            assert len(page_targets(server)) == 1
+                            command(server.path, "open", origin + "/")
+                            if index == 0:
+                                command(server.path, "eval", "localStorage.setItem('saved','fixture'); document.cookie='saved=fixture; Max-Age=3600; SameSite=Lax'; true")
+                                command(server.path, "eval", "const a=document.createElement('a'); a.id='export'; a.href='data:text/plain,saved-profile-download'; a.download='saved.txt'; a.textContent='Download'; document.body.append(a); true")
+                                command(server.path, "download", "#export", str(root / "saved.txt"))
+                                assert (root / "saved.txt").read_text() == "saved-profile-download"
+                                command(server.path, "close")
+                            else:
+                                assert command(server.path, "eval", "localStorage.getItem('saved')") == "fixture"
+                                assert command(server.path, "eval", "document.cookie.includes('saved=fixture')") is True
+                                server.process.send_signal(signal.SIGTERM)
+                            server.done()
+                            assert marker.read_text() == "caller-owned"
+                            assert (profile / "downloads" / "keep").read_text() == "saved download"
+                            assert not (profile / "SingletonLock").is_symlink()
+                finally:
+                    fixture_server.shutdown()
+                    thread.join(timeout=5)
+            assert command(peer.path, "eval", "true") is True
+            command(peer.path, "close")
+            peer.done()
+        (profile / "SingletonLock").symlink_to("stale-host-12345")
+        assert command(failure, "serve", "--user-data-dir", str(profile), ok=False) == "ProfileInUse"
+        assert (profile / "SingletonLock").readlink() == Path("stale-host-12345")
+        assert not failure.exists()
+        assert command(failure, "serve", "--user-data-dir", str(root / "missing-profile"), ok=False) == "FileNotFound"
+        assert not failure.exists()
+        print("Saved profile cookies/storage, startup tab, busy/stale endpoints, downloads, and preservation: passed", flush=True)
 
 
 if __name__ == "__main__":

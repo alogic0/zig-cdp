@@ -44,6 +44,14 @@ call. A short-lived exec environment that kills the owner on return cannot
 support this workflow. Do not put blocking `serve` before client commands in the
 same sequential shell script.
 
+If the user supplies a Chrome profile, pass `--user-data-dir /absolute/profile`
+to `serve`. Use that exact existing directory; do not substitute a fresh profile.
+This mode controls the startup tab in the profile's normal context, retaining its
+cookies and local storage. Add `--headed` for a visible window. Chrome must be
+closed for that profile; `ProfileInUse` means it has a lock. The CLI never deletes
+the supplied profile. Both modes select a free loopback debugging port, reported
+as `port` in the readiness record and `status` result.
+
 For a real application, start its server separately, run `allow ORIGIN` for the
 page/API/asset origins it needs, and then `open URL`. Origins have no path or
 trailing slash. For example, allow `http://127.0.0.1:4180` before opening
@@ -106,7 +114,8 @@ Always close the session, including when the task fails:
 ```
 
 `close` acknowledges the shutdown request. Wait for the retained owner process
-to exit; it removes its browser profile, control socket, and session directory.
+to exit; it removes its temporary workspace, control socket, and session
+directory. A profile supplied with `--user-data-dir` remains on disk.
 If commands cannot reach it, terminate **your recorded owner process** with
 SIGTERM and wait for it. Keep or remove your artifact directory according to the
 task. Sessions otherwise expire after 900 seconds without client activity.
@@ -139,7 +148,7 @@ After the JSON readiness message, use another terminal to control that browser:
 Start your web application separately. All commands share one page until you
 close the session. Use `serve --headed` for a visible browser. `--help` lists
 commands; the [CLI guide](docs/cli.md) includes a complete example without a
-server, JSON results, uploads/downloads, and session cleanup.
+server, saved-profile usage, JSON results, uploads/downloads, and session cleanup.
 
 ## Library
 

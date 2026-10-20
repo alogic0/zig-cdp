@@ -52,9 +52,21 @@ then `/usr/bin/chromium-browser`. Use
 to select another executable or open a visible browser. Headed mode needs a
 working graphical session. The normal browser sandbox remains enabled.
 
-Each browser owns a new private profile, ephemeral debug port, and process group.
-Each page owns a separate browser context. Close pages, stop the browser, then
-destroy the arena, in that order. `stop()` is idempotent. It bounds the graceful
+By default each browser owns a new private profile, ephemeral debug port, and
+process group. Set `Options.user_data_dir` to an existing unlocked user-data
+directory to preserve it across runs. The supplied directory is never deleted;
+private download staging and other temporary files use a separate workspace.
+Locks are rejected without removal. Startup checks a fresh debugging endpoint
+and the launched child's profile lock before connecting.
+
+`browser.page(origins)` creates an isolated context in either mode.
+`browser.profilePage(origins)` instead reuses a blank tab in the default context
+(or creates one if none exists), sharing the profile's cookies and local storage.
+Closing this page detaches; stopping the browser closes the owned process.
+The CLI uses this method when `--user-data-dir` is supplied.
+
+Close pages, stop the browser, then destroy the arena, in that order.
+`stop()` is idempotent. It bounds the graceful
 protocol close and process wait separately to two seconds each, then force-cleans
 the owned process group and joins the exact child. The library does not install
 signal handlers or subreaper policy and never reaps unrelated children.

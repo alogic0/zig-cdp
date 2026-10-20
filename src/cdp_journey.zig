@@ -54,6 +54,8 @@ pub const Browser = struct {
     client: cdp.CdpClient,
     socket: cdp.WsSession,
     profile: []const u8,
+    workspace: []const u8,
+    persistent_profile: bool,
     downloads_dir: []const u8,
     downloads: std.ArrayList(V) = .empty,
     version: []const u8,
@@ -61,6 +63,8 @@ pub const Browser = struct {
     pub const Options = struct {
         executable: ?[]const u8 = null,
         headless: bool = true,
+        /// Existing user-data directory. Caller data survives stop and failures.
+        user_data_dir: ?[]const u8 = null,
     };
 
     pub fn start(a: A, io: std.Io) !*Browser {
@@ -68,11 +72,27 @@ pub const Browser = struct {
     }
 
     pub fn startWithOptions(a: A, io: std.Io, options: Options) !*Browser {
+        const supplied_profile = if (options.user_data_dir) |directory| blk: {
+            const resolved = try std.Io.Dir.cwd().realPathFileAlloc(io, directory, a);
+            const dir = try std.Io.Dir.cwd().openDir(io, resolved, .{});
+            defer dir.close(io);
+            if (dir.statFile(io, "SingletonLock", .{ .follow_symlinks = false })) |_| {
+                return error.ProfileInUse;
+            } else |err| if (err != error.FileNotFound) return err;
+            break :blk resolved;
+        } else null;
         var random: [12]u8 = undefined;
         io.random(&random);
-        const profile = try a.print("/tmp/owned-cdp-{s}", .{std.fmt.bytesToHex(random, .lower)});
-        try std.Io.Dir.cwd().createDir(io, profile, .fromMode(0o700));
-        errdefer std.Io.Dir.cwd().deleteTree(io, profile) catch {};
+        const workspace = try a.print("/tmp/owned-cdp-{s}", .{std.fmt.bytesToHex(random, .lower)});
+        try std.Io.Dir.cwd().createDir(io, workspace, .fromMode(0o700));
+        errdefer std.Io.Dir.cwd().deleteTree(io, workspace) catch {};
+        const profile = supplied_profile orelse workspace;
+        const active = try a.print("{s}/DevToolsActivePort", .{profile});
+        const previous_active = std.Io.Dir.cwd().readFileAlloc(io, active, a, .limited(4096)) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return err,
+        };
+        defer if (previous_active) |bytes| a.free(bytes);
         const arg = try a.print("--user-data-dir={s}", .{profile});
         var argv: std.ArrayList([]const u8) = .empty;
         defer argv.deinit(a);
@@ -81,25 +101,39 @@ pub const Browser = struct {
         try argv.appendSlice(a, &.{ "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", arg, "--no-first-run", "--no-default-browser-check", "--disable-sync", "--disable-background-networking", "--disable-search-engine-choice-screen", "--force-color-profile=srgb", "about:blank" });
         var child = try process.Child.spawn(a, io, .{ .argv = argv.items });
         errdefer child.deinit();
-        const active = try a.print("{s}/DevToolsActivePort", .{profile});
         var port: u16 = 0;
+        var browser_path: []const u8 = "";
         const deadline = now(io) + 10000;
         while (now(io) < deadline) {
             if (try child.poll() != null) return error.BrowserExited;
+            try std.Io.sleep(io, .fromMilliseconds(50), .awake);
             const bytes = std.Io.Dir.cwd().readFileAlloc(io, active, a, .limited(4096)) catch {
-                try std.Io.sleep(io, .fromMilliseconds(50), .awake);
                 continue;
             };
             defer a.free(bytes);
-            port = try std.fmt.parseInt(u16, bytes[0 .. std.mem.indexOfScalar(u8, bytes, '\n') orelse bytes.len], 10);
+            if (previous_active) |previous| if (std.mem.eql(u8, previous, bytes)) continue;
+            // Do not connect to a stale endpoint or another process which won
+            // Chrome's profile lock during a concurrent launch.
+            var lock_buffer: [512]u8 = undefined;
+            const lock_len = std.Io.Dir.cwd().readLink(io, try a.print("{s}/SingletonLock", .{profile}), &lock_buffer) catch continue;
+            const lock = lock_buffer[0..lock_len];
+            const pid_start = (std.mem.lastIndexOfScalar(u8, lock, '-') orelse continue) + 1;
+            const locked_pid = std.fmt.parseInt(i32, lock[pid_start..], 10) catch continue;
+            if (locked_pid != child.pid.?) continue;
+            const newline = std.mem.indexOfScalar(u8, bytes, '\n') orelse continue;
+            const endpoint = std.mem.trim(u8, bytes[newline + 1 ..], "\r\n");
+            if (!std.mem.startsWith(u8, endpoint, "/devtools/browser/")) continue;
+            port = std.fmt.parseInt(u16, bytes[0..newline], 10) catch continue;
+            browser_path = try a.dupe(u8, endpoint);
             break;
         }
         if (port == 0) return error.BrowserLaunchTimeout;
         const client = cdp.CdpClient.init(a, io, port);
-        var socket = try client.connectBrowser();
+        var socket = try client.connectWs(browser_path);
         errdefer socket.close();
+        if (try child.poll() != null) return error.BrowserExited;
         const self = try a.create(Browser);
-        self.* = .{ .a = a, .io = io, .child = child, .client = client, .socket = socket, .profile = profile, .downloads_dir = try a.print("{s}/downloads", .{profile}), .version = "" };
+        self.* = .{ .a = a, .io = io, .child = child, .client = client, .socket = socket, .profile = profile, .workspace = workspace, .persistent_profile = supplied_profile != null, .downloads_dir = try a.print("{s}/downloads", .{workspace}), .version = "" };
         try std.Io.Dir.cwd().createDir(io, self.downloads_dir, .default_dir);
         self.socket.event_context = self;
         self.socket.event_handler = onEvent;
@@ -125,8 +159,8 @@ pub const Browser = struct {
             _ = self.child.stop(0) catch {};
         };
         self.child.deinit();
-        std.Io.Dir.cwd().deleteTree(self.io, self.profile) catch |err| {
-            std.debug.print("Owned browser profile cleanup failed: {s}: {s}\n", .{ self.profile, @errorName(err) });
+        std.Io.Dir.cwd().deleteTree(self.io, self.workspace) catch |err| {
+            std.debug.print("Owned browser workspace cleanup failed: {s}: {s}\n", .{ self.workspace, @errorName(err) });
         };
     }
     fn closeProtocol(self: *Browser) !void {
@@ -145,6 +179,28 @@ pub const Browser = struct {
         const context = str(field(try self.command("Target.createBrowserContext", .{}), "browserContextId"));
         errdefer _ = self.command("Target.disposeBrowserContext", .{ .browserContextId = context }) catch {};
         const id = str(field(try self.command("Target.createTarget", .{ .url = "about:blank", .browserContextId = context }), "targetId"));
+        return self.connectPage(id, context, origins);
+    }
+    /// Reuse the startup blank tab in the profile's default (non-incognito)
+    /// context. Page.close detaches; Browser.stop closes the owned browser.
+    pub fn profilePage(self: *Browser, origins: []const []const u8) !*Page {
+        // Chrome may give the default context a nonempty ID too. The list
+        // returned by getBrowserContexts contains only non-default contexts.
+        const contexts = field(try self.command("Target.getBrowserContexts", .{}), "browserContextIds");
+        const targets = field(try self.command("Target.getTargets", .{}), "targetInfos");
+        if (targets == .array) for (targets.array.items) |target| {
+            if (!std.mem.eql(u8, str(field(target, "type")), "page") or
+                !std.mem.eql(u8, str(field(target, "url")), "about:blank")) continue;
+            var isolated = false;
+            if (contexts == .array) for (contexts.array.items) |context| {
+                if (std.mem.eql(u8, str(context), str(field(target, "browserContextId")))) isolated = true;
+            };
+            if (!isolated) return self.connectPage(str(field(target, "targetId")), "", origins);
+        };
+        const id = str(field(try self.command("Target.createTarget", .{ .url = "about:blank" }), "targetId"));
+        return self.connectPage(id, "", origins);
+    }
+    fn connectPage(self: *Browser, id: []const u8, context: []const u8, origins: []const []const u8) !*Page {
         const ws = try self.a.print("/devtools/page/{s}", .{id});
         var socket = try self.client.connectWs(ws);
         errdefer socket.close();
@@ -157,9 +213,14 @@ pub const Browser = struct {
         _ = try p.command("Network.enable", .{ .maxTotalBufferSize = 64 * 1024 * 1024, .maxResourceBufferSize = 20 * 1024 * 1024, .maxPostDataSize = 1024 * 1024, .enableDurableMessages = true });
         _ = try p.command("Fetch.enable", .{ .patterns = .{.{ .urlPattern = "*", .requestStage = "Request" }} });
         _ = try p.command("Emulation.setDeviceMetricsOverride", .{ .width = 1280, .height = 720, .deviceScaleFactor = 1, .mobile = false });
-        _ = try self.command("Browser.setDownloadBehavior", .{ .behavior = "allowAndName", .browserContextId = context, .downloadPath = self.downloads_dir, .eventsEnabled = true });
+        if (context.len == 0) {
+            _ = try self.command("Browser.setDownloadBehavior", .{ .behavior = "allowAndName", .downloadPath = self.downloads_dir, .eventsEnabled = true });
+        } else {
+            _ = try self.command("Browser.setDownloadBehavior", .{ .behavior = "allowAndName", .browserContextId = context, .downloadPath = self.downloads_dir, .eventsEnabled = true });
+        }
         try p.initScript(@embedFile("cdp_locators.js"));
         _ = try p.eval(@embedFile("cdp_locators.js"));
+        _ = try p.command("Page.bringToFront", .{});
         return p;
     }
 };
@@ -260,7 +321,8 @@ pub const Page = struct {
         if (self.closed) return;
         self.closed = true;
         self.socket.close();
-        _ = self.browser.command("Target.disposeBrowserContext", .{ .browserContextId = self.context }) catch {};
+        if (self.context.len != 0)
+            _ = self.browser.command("Target.disposeBrowserContext", .{ .browserContextId = self.context }) catch {};
     }
     pub fn command(self: *Page, method: []const u8, params: anytype) !V {
         return commandValue(self.a, &self.socket, method, params);

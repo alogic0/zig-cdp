@@ -6,7 +6,8 @@ const help =
     \\Usage: zig-cdp --session PATH COMMAND [ARGS]
     \\
     \\serve [--allow ORIGIN]... [--browser PATH] [--headed]
-    \\      [--idle-timeout SECONDS]    Own a persistent browser (foreground)
+    \\      [--user-data-dir PATH] [--idle-timeout SECONDS]
+    \\                                Own a persistent browser (foreground)
     \\status                           Browser version, URL, and session state
     \\allow ORIGIN                     Allow an HTTP(S) origin for this page
     \\open URL                         Navigate the existing page
@@ -24,6 +25,9 @@ const help =
     \\close                            Stop the owned browser and server
     \\
     \\PATH is a new session directory for serve, the same directory for clients.
+    \\--user-data-dir uses an existing, unlocked profile and preserves it on close.
+    \\Without it, the browser uses a fresh temporary profile and isolated context.
+    \\Chrome selects a free loopback port; readiness and status report that port.
     \\The default idle timeout is 900 seconds. Replies are JSON; failures exit 1.
     \\File paths are resolved from the client's current working directory.
     \\Use --session before COMMAND; --help and --version need no session.
@@ -63,6 +67,8 @@ fn run(init: std.process.Init) !u8 {
                 options.browser.headless = false;
             } else if (std.mem.eql(u8, arg, "--browser")) {
                 options.browser.executable = try absolute(a, init.io, iterator.next() orelse return error.MissingBrowserPath);
+            } else if (std.mem.eql(u8, arg, "--user-data-dir")) {
+                options.browser.user_data_dir = try absolute(a, init.io, iterator.next() orelse return error.MissingProfilePath);
             } else if (std.mem.eql(u8, arg, "--allow")) {
                 const origin = iterator.next() orelse return error.MissingOrigin;
                 try session.validateOrigin(origin);

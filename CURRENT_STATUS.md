@@ -58,9 +58,9 @@ expiry, and SIGINT/SIGTERM during work remove the session directory and browser
 profile and leave the owned browser PID absent. Closing one session leaves its
 peer usable. These are finite interface checks, not every transport fault.
 
-Delivery is complete for Linux headless sessions with the pinned compiler.
-Headed-window behavior, cross-engine support, indefinite session memory growth,
-SIGKILL recovery, publication, and consumer migration remain outside this scope.
+The initial delivery covered Linux headless sessions with the pinned compiler.
+Cross-engine support, indefinite session memory growth, SIGKILL recovery,
+publication, and consumer migration remain outside this scope.
 Both original repositories remain unchanged by this delivery.
 
 ## Agent README workflow
@@ -75,3 +75,31 @@ Executed all five README command blocks verbatim using separate shells with
 Debug and ReleaseSafe binaries. Both runs verified discovered controls, input
 and click effects, the expected text result, PNG bytes, and removal of the owned
 session/profile/process. Documentation links and diff checks passed.
+
+## Existing profiles
+
+Added CLI `serve --user-data-dir PATH` and library `Options.user_data_dir` for
+an existing unlocked Chrome profile. The CLI uses `profilePage` to control the
+startup tab in the default context, preserving cookies and local storage and
+avoiding an extra incognito window. Isolated `page` behavior remains available.
+Readiness/status include the selected free CDP port and profile mode.
+
+Caller profile ownership is separate from private workspace/download staging.
+Close, signals, and launch failures never delete the supplied directory. Startup
+rejects existing locks without altering them, ignores a stale endpoint record,
+and verifies the new endpoint against the launched child's Chrome profile lock.
+
+Verification with Chrome 155.0.8059.84:
+
+- Debug: `zig build test test-cli check --summary all`, 8/8 steps and 9/9 tests.
+- ReleaseSafe: `zig build test test-cli check example install
+  -Doptimize=ReleaseSafe --summary all`, 12/12 steps and 9/9 tests.
+- CLI checks proved cookie/local-storage persistence across restarts, one startup
+  page, busy/stale-lock rejection, stale-endpoint and unrelated-process
+  preservation, download output, profile files surviving close/SIGTERM/failures,
+  and normal cleanup of temporary profiles. The library check also verified
+  workspace removal and choosing the default tab alongside an isolated context.
+- Opened the requested application in a visible X11 window using the user's
+  supplied profile. Verified one page/one window, completed navigation, CLI
+  evaluation, and a new loopback-only debugging port. Left this session open as
+  requested. This is one real headed-session check, not general desktop coverage.

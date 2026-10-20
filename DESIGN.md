@@ -11,18 +11,27 @@ dependency. The package exports the `cdp` module and installs `zig-cdp`.
 The protocol and journey layers originate in zg-gui's native browser tooling.
 The protocol layer exposes `CdpClient`, `WsSession`, and `Target`; callers may
 connect to an existing loopback CDP endpoint without owning its process.
-`journey.Browser` owns a fresh profile, ephemeral loopback debug port, and one
-browser process group. It uses `zig-process` for launch and cleanup. It never
-changes process-wide signal or subreaper policy.
+`journey.Browser` owns a private temporary workspace, ephemeral loopback debug
+port, and one browser process group. By default the workspace is also its fresh
+profile. An explicitly supplied existing user-data directory remains caller
+owned and is never deleted, including on startup failure. Download staging stays
+in the workspace. It uses `zig-process` for launch and cleanup. It never changes
+process-wide signal or subreaper policy.
 
 `Browser.start` uses default launch options. `startWithOptions` additionally
-accepts an explicit executable and headed/headless mode. Close pages before
-stopping their browser; then destroy the journey arena. Pages own isolated
-browser contexts and retain an exact origin allowlist supplied by the caller.
+accepts an explicit executable, headed/headless mode, and `user_data_dir`.
+Existing profile locks are rejected without modification. Before connecting,
+require a new DevToolsActivePort record and a profile lock naming the launched
+child; connect to that record's browser WebSocket path. A stale record must not
+attach to or close another process. Close pages before stopping their browser;
+then destroy the journey arena. `page` owns an isolated context; `profilePage`
+uses the default context and reuses a startup blank tab when present. Its close
+detaches without disposing the default context. Both retain an exact origin
+allowlist supplied by the caller.
 Journey results borrow arena storage. Socket use is serialized by the caller.
 Graceful shutdown requests browser closure and waits up to two seconds; fallback
 cleanup joins the exact child and terminates its owned process group before
-removing the profile. Calling stop again is harmless.
+removing the temporary workspace. Calling stop again is harmless.
 
 Protocol frames and queued messages are bounded; malformed replies and wire
 failures seal the affected connection. The initial extraction retains the finite
@@ -36,6 +45,10 @@ and listens on its Unix socket. It stays in the foreground and owns one browser
 and page. Independent CLI calls use `--session PATH` to address that same page.
 Multiple sessions use distinct directories and processes. No detached daemon,
 global service, fixed TCP control port, or saved user browser profile is needed.
+`--user-data-dir` explicitly selects an existing profile and its default context
+instead of the isolated context. Cookies/storage then survive session restarts.
+The CLI controls the startup tab without creating another incognito window.
+Readiness/status expose the profile, persistence flag, and selected debug port.
 
 The session directory must not already exist. Refuse collisions rather than
 deleting another owner's state. On normal close, idle expiry, SIGINT, or SIGTERM,

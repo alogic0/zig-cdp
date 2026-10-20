@@ -67,11 +67,11 @@ pub fn serve(backing: A, io: std.Io, options: Options) !void {
 
     const browser = try J.Browser.startWithOptions(a, io, options.browser);
     defer browser.stop();
-    const page = try browser.page(&.{});
+    const page = if (browser.persistent_profile) try browser.profilePage(&.{}) else try browser.page(&.{});
     defer page.close();
     var state: State = .{ .page = page };
     for (options.origins) |origin| try state.allow(origin);
-    const ready = try J.json(a, .{ .ok = true, .ready = true, .session = options.directory, .browser = browser.version, .pid = browser.child.pid, .profile = browser.profile });
+    const ready = try J.json(a, .{ .ok = true, .ready = true, .session = options.directory, .browser = browser.version, .pid = browser.child.pid, .profile = browser.profile, .persistent_profile = browser.persistent_profile, .port = browser.client.port });
     try std.Io.File.stdout().writeStreamingAll(io, ready);
     try std.Io.File.stdout().writeStreamingAll(io, "\n");
 
@@ -176,7 +176,7 @@ const State = struct {
                 self.closed = true;
                 return .{ .string = "closing" };
             },
-            .status => return J.val(p.a, .{ .browser = p.browser.version, .url = try p.url(), .origins = self.origins.items, .timeout_ms = p.timeout_ms }),
+            .status => return J.val(p.a, .{ .browser = p.browser.version, .url = try p.url(), .origins = self.origins.items, .timeout_ms = p.timeout_ms, .profile = p.browser.profile, .persistent_profile = p.browser.persistent_profile, .port = p.browser.client.port }),
             .allow => try self.allow(args[0]),
             .open => {
                 const url = J.str(try p.evaluate("url => new URL(url).href", args[0]));

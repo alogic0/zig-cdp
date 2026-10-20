@@ -14,7 +14,8 @@ already exist:
 ```
 
 It prints a JSON readiness record with the browser version, owned browser PID,
-profile, and session directory. Keep this process running. In terminal two:
+profile, `persistent_profile` flag, free loopback `port`, and session directory.
+Keep this process running. In terminal two:
 
 ```sh
 cdp=./zig-out/bin/zig-cdp
@@ -31,8 +32,32 @@ session=/tmp/cdp-demo
 
 The `text` command prints `{"ok":true,"result":"Sample"}`. Commands run in
 separate processes but share the same browser page, variables, cookies, and DOM.
-This fixture needs no web server. A session owns a fresh browser profile; it does
-not use your normal browsing profile.
+This fixture needs no web server. By default a session uses a fresh browser
+profile and isolated context.
+
+## Use an existing profile
+
+Pass the existing Chrome user-data directory to preserve login state:
+
+```sh
+./zig-out/bin/zig-cdp --session /tmp/cdp-saved serve --headed \
+  --user-data-dir /absolute/path/to/profile --allow https://app.example
+```
+
+Then run `open https://app.example/` against `/tmp/cdp-saved`. The CLI controls
+the startup blank tab in the profile's normal context, using its cookies and
+local storage. It does not create an extra incognito window. Existing restored
+tabs are left in place. The profile must exist and be unlocked; close Chrome
+using it first. `ProfileInUse` leaves an existing lock untouched, including a
+stale lock that needs manual inspection. This launches an owned Chrome process;
+it does not attach to an already-running Chrome instance.
+
+Chrome selects a free port with `--remote-debugging-port=0`, bound to loopback.
+Both readiness and `status` report `port`, `profile`, and `persistent_profile`.
+No fixed port or stale `DevToolsActivePort` is reused. `close`, signals, launch
+failures, and idle expiry preserve the supplied profile. Download staging uses
+a separate private temporary directory. Normal browser activity still updates
+the profile, and the CLI closes its owned browser when the session ends.
 
 ## Navigate your application
 
@@ -61,7 +86,7 @@ shell passes each as one argument. All element commands use CSS selectors.
 
 | Command | Behavior |
 | --- | --- |
-| `status` | Return browser version, current URL, origins, and page timeout. |
+| `status` | Return browser version, URL, origins, timeout, profile mode/path, and CDP port. |
 | `allow ORIGIN` | Add an origin to this page's allowlist. |
 | `open URL` | Navigate and wait for the new document to finish loading. |
 | `reload` | Reload the current page. |
@@ -126,6 +151,7 @@ control. Options:
 --allow ORIGIN          Repeat for every required origin
 --browser PATH         Explicit Chrome/Chromium executable
 --headed               Show the browser (requires a graphical session)
+--user-data-dir PATH    Existing unlocked profile; preserved on shutdown
 --idle-timeout SECONDS  Close after no client connections; default 900, max 86400
 ```
 
@@ -134,7 +160,8 @@ inside it. A second owner using the same directory fails without removing the
 existing session. Separate directories create isolated browser sessions.
 
 `close`, idle expiry, Ctrl+C, and SIGTERM trigger page/browser cleanup, join the
-owned browser process, and remove the socket and session directory. `close`
+owned browser process, and remove the temporary workspace, socket, and session
+directory. A supplied user-data directory is preserved. `close`
 acknowledges the shutdown request; wait for the owner process to exit before
 reusing its directory. SIGKILL or machine failure cannot run cleanup. Inspect
 stale directories and the PID/profile from the prior readiness record yourself;
@@ -144,5 +171,6 @@ Browser observations and values stay in an arena for the session's lifetime.
 Close and restart between long workflows; this version is intended for finite
 automation sessions rather than an indefinite browser daemon. The owner services
 browser events between commands so background requests can finish while idle.
-Headless automation and cleanup have finite test coverage; visible-window
-behavior and every Chrome version are not established by those tests.
+Headless automation and cleanup have finite test coverage. One X11 saved-profile
+window was checked manually; the automated tests do not establish all graphical
+session behavior or every Chrome version.
