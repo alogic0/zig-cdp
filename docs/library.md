@@ -85,8 +85,10 @@ are different origins. Intercepted requests outside the list are blocked.
 in-memory fixtures. Page interception is not a process-wide network sandbox.
 
 `page.goto(url)` and `reload()` wait for a new document to finish loading. Wait
-separately for the application to become ready. The default viewport is 1280 ×
-720 and the default page timeout is 30 seconds; set `page.timeout_ms` as needed.
+separately for the application to become ready. Headless pages use a fixed
+1280 × 720 viewport. Headed pages use the window's natural content size and
+display scale, and follow resizing without a device-metrics override. The default
+page timeout is 30 seconds; set `page.timeout_ms` as needed.
 `initScript(source)` registers JavaScript for subsequent documents.
 
 ## Actions and evaluation

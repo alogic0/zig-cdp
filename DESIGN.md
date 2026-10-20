@@ -49,6 +49,8 @@ global service, fixed TCP control port, or saved user browser profile is needed.
 instead of the isolated context. Cookies/storage then survive session restarts.
 The CLI controls the startup tab without creating another incognito window.
 Readiness/status expose the profile, persistence flag, and selected debug port.
+Headless pages keep deterministic 1280 × 720 device metrics. Headed pages leave
+metrics to Chrome so the viewport and display scale follow the actual window.
 
 The session directory must not already exist. Refuse collisions rather than
 deleting another owner's state. On normal close, idle expiry, SIGINT, or SIGTERM,

@@ -117,6 +117,8 @@ test "owned CDP actual input upload download isolation and origin denial" {
     defer browser.stop();
     const p = try browser.page(&.{});
     defer p.close();
+    try std.testing.expectEqual(@as(i64, 1280), J.number(try p.eval("innerWidth")));
+    try std.testing.expectEqual(@as(i64, 720), J.number(try p.eval("innerHeight")));
     const mark = try p.mark();
     _ = try p.eval("Promise.all([fetch('data:text/plain,first-body').then(r=>r.text()),fetch('data:text/plain,second-body').then(r=>r.text())])");
     try p.pump();

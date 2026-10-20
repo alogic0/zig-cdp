@@ -56,6 +56,7 @@ pub const Browser = struct {
     profile: []const u8,
     workspace: []const u8,
     persistent_profile: bool,
+    headless: bool,
     downloads_dir: []const u8,
     downloads: std.ArrayList(V) = .empty,
     version: []const u8,
@@ -133,7 +134,7 @@ pub const Browser = struct {
         errdefer socket.close();
         if (try child.poll() != null) return error.BrowserExited;
         const self = try a.create(Browser);
-        self.* = .{ .a = a, .io = io, .child = child, .client = client, .socket = socket, .profile = profile, .workspace = workspace, .persistent_profile = supplied_profile != null, .downloads_dir = try a.print("{s}/downloads", .{workspace}), .version = "" };
+        self.* = .{ .a = a, .io = io, .child = child, .client = client, .socket = socket, .profile = profile, .workspace = workspace, .persistent_profile = supplied_profile != null, .headless = options.headless, .downloads_dir = try a.print("{s}/downloads", .{workspace}), .version = "" };
         try std.Io.Dir.cwd().createDir(io, self.downloads_dir, .default_dir);
         self.socket.event_context = self;
         self.socket.event_handler = onEvent;
@@ -212,7 +213,8 @@ pub const Browser = struct {
         _ = try p.command("Runtime.enable", .{});
         _ = try p.command("Network.enable", .{ .maxTotalBufferSize = 64 * 1024 * 1024, .maxResourceBufferSize = 20 * 1024 * 1024, .maxPostDataSize = 1024 * 1024, .enableDurableMessages = true });
         _ = try p.command("Fetch.enable", .{ .patterns = .{.{ .urlPattern = "*", .requestStage = "Request" }} });
-        _ = try p.command("Emulation.setDeviceMetricsOverride", .{ .width = 1280, .height = 720, .deviceScaleFactor = 1, .mobile = false });
+        if (self.headless)
+            _ = try p.command("Emulation.setDeviceMetricsOverride", .{ .width = 1280, .height = 720, .deviceScaleFactor = 1, .mobile = false });
         if (context.len == 0) {
             _ = try self.command("Browser.setDownloadBehavior", .{ .behavior = "allowAndName", .downloadPath = self.downloads_dir, .eventsEnabled = true });
         } else {

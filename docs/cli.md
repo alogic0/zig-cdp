@@ -102,8 +102,10 @@ shell passes each as one argument. All element commands use CSS selectors.
 | `download CSS PATH` | Click a control and save the completed download. |
 | `close` | Ask the owner to shut down and clean up. |
 
-The browser starts at 1280 × 720. Use `eval` for DOM inspection and the library
-for additional CDP methods, role/name locators, multiple contexts, or structured
+Headless pages use a fixed 1280 × 720 viewport. With `--headed`, the page follows
+the window's available content size and native display scale, including resizes.
+Use `eval` for DOM inspection and the library for additional CDP methods,
+role/name locators, multiple contexts, or structured
 HTTP response observations. A successful `eval` may return `null` for values CDP
 cannot serialize by value; prefer plain JSON-compatible results. Application
 assertions belong in your script: evaluating `false` is successful evaluation,
@@ -171,6 +173,7 @@ Browser observations and values stay in an arena for the session's lifetime.
 Close and restart between long workflows; this version is intended for finite
 automation sessions rather than an indefinite browser daemon. The owner services
 browser events between commands so background requests can finish while idle.
-Headless automation and cleanup have finite test coverage. One X11 saved-profile
-window was checked manually; the automated tests do not establish all graphical
-session behavior or every Chrome version.
+Headless automation and cleanup have finite test coverage. Automated Xvfb checks
+cover native viewport resizing in default and isolated contexts. One X11
+saved-profile window was also checked manually. These checks do not establish
+all graphical session behavior or every Chrome version.

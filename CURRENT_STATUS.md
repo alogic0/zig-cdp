@@ -103,3 +103,24 @@ Verification with Chrome 155.0.8059.84:
   supplied profile. Verified one page/one window, completed navigation, CLI
   evaluation, and a new loopback-only debugging port. Left this session open as
   requested. This is one real headed-session check, not general desktop coverage.
+
+## Headed viewport correction
+
+Headed pages previously inherited the headless 1280 × 720 device-metrics
+override, leaving unused space in larger windows. Browser launch mode now
+controls this override: headed pages use Chrome's native viewport and display
+scale; headless pages retain the fixed dimensions.
+
+Added `test-headed`, which uses a separate Xvfb display and removes inherited
+Wayland selection. Its real-browser regression resizes default-context and
+isolated-context windows twice and checks that the content dimensions follow
+both width and height changes. It failed before the fix and passed afterward.
+The existing headless fixture also verifies its 1280 × 720 dimensions.
+
+- Debug `zig build test-headed test check --summary all`: 9/9 build steps,
+  9/9 library tests and 1/1 headed regression passed.
+- ReleaseSafe with the same steps plus `install`: 11/11 build steps,
+  9/9 library tests and 1/1 headed regression passed.
+- Removed the live page's override through CDP without restarting the browser.
+  Its viewport changed from 1280 × 720 to the actual 1919 × 992 content area.
+  The existing profile, window, and debugging port remain in use.

@@ -47,7 +47,8 @@ same sequential shell script.
 If the user supplies a Chrome profile, pass `--user-data-dir /absolute/profile`
 to `serve`. Use that exact existing directory; do not substitute a fresh profile.
 This mode controls the startup tab in the profile's normal context, retaining its
-cookies and local storage. Add `--headed` for a visible window. Chrome must be
+cookies and local storage. Add `--headed` for a visible window; the page follows
+the window's content size and native display scale. Chrome must be
 closed for that profile; `ProfileInUse` means it has a lock. The CLI never deletes
 the supplied profile. Both modes select a free loopback debugging port, reported
 as `port` in the readiness record and `status` result.
@@ -170,11 +171,14 @@ zig build test check example --summary all
 zig build test check example -Doptimize=ReleaseSafe --summary all
 zig build test-cli --summary all
 zig build test-cli -Doptimize=ReleaseSafe --summary all
+zig build test-headed --summary all
+zig build test-headed -Doptimize=ReleaseSafe --summary all
 ```
 
 The CLI acceptance tests use Python 3's standard library. The library and CLI
-have no Python runtime dependency. The independent package check runs with
-`zig build test` from `tests/package` in either optimization profile.
+have no Python runtime dependency. `test-headed` requires `xvfb-run` and tests
+window resizing on a separate virtual X display. The independent package check
+runs with `zig build test` from `tests/package` in either optimization profile.
 
 The compiler uses `-O debug` and `-O safe` for direct compiler invocations;
 `zig build` uses `-Doptimize=Debug` and `-Doptimize=ReleaseSafe`.

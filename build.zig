@@ -49,4 +49,14 @@ pub fn build(b: *std.Build) void {
     cli_tests.addFileArg(b.path("tests/cli.py"));
     cli_tests.addArtifactArg(cli);
     b.step("test-cli", "Run CLI session acceptance tests (requires Python 3)").dependOn(&cli_tests.step);
+    const headed_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/cdp_headed_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "cdp", .module = cdp }},
+    }) });
+    // Keep graphical checks off the user's desktop, even in a Wayland session.
+    const headed_run = b.addSystemCommand(&.{ "env", "-u", "WAYLAND_DISPLAY", "-u", "WAYLAND_SOCKET", "XDG_SESSION_TYPE=x11", "GDK_BACKEND=x11", "xvfb-run", "-a", "-s", "-screen 0 1600x1000x24" });
+    headed_run.addArtifactArg(headed_tests);
+    b.step("test-headed", "Check native viewport resizing (requires xvfb-run)").dependOn(&headed_run.step);
 }
