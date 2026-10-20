@@ -62,3 +62,16 @@ Delivery is complete for Linux headless sessions with the pinned compiler.
 Headed-window behavior, cross-engine support, indefinite session memory growth,
 SIGKILL recovery, publication, and consumer migration remain outside this scope.
 Both original repositories remain unchanged by this delivery.
+
+## Agent README workflow
+
+The README now has a direct shell-tool workflow: retain the session owner, wait
+for its readiness record, preserve absolute paths across fresh tool calls,
+inspect bounded DOM data, act with observed CSS selectors, verify JSON results,
+capture a screenshot, and close/join the owner. Corrected the argument order in
+the design document to match the CLI.
+
+Executed all five README command blocks verbatim using separate shells with
+Debug and ReleaseSafe binaries. Both runs verified discovered controls, input
+and click effects, the expected text result, PNG bytes, and removal of the owned
+session/profile/process. Documentation links and diff checks passed.

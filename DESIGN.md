@@ -31,7 +31,7 @@ CDP, accessibility, browser-version, or cross-engine compatibility.
 
 ## CLI session owner
 
-`zig-cdp serve --session PATH` exclusively creates a private session directory
+`zig-cdp --session PATH serve` exclusively creates a private session directory
 and listens on its Unix socket. It stays in the foreground and owns one browser
 and page. Independent CLI calls use `--session PATH` to address that same page.
 Multiple sessions use distinct directories and processes. No detached daemon,

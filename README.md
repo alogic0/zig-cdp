@@ -9,6 +9,108 @@ ownership comes from the sibling [`zig-process`](../zig-process) package.
 Keep both repositories under the same parent directory for the supplied local
 path dependency. Node.js and a browser-driver service are not required.
 
+## For agents
+
+Use the **CLI through shell/exec tools** for browser control. You do not need to
+write or compile a Zig program for each task. This executable is not an MCP
+server. Build it once with `zig build -Doptimize=ReleaseSafe` from this repository
+if `zig-out/bin/zig-cdp` is missing. Run `zig-out/bin/zig-cdp --help` to discover
+the available commands.
+
+### Start and retain a session
+
+Record three absolute paths in your task state:
+
+- `cdp_bin`: this repository's `zig-out/bin/zig-cdp` executable.
+- `cdp_artifacts`: a fresh temporary directory you create, for example with
+  `mktemp -d /tmp/zig-cdp-agent.XXXXXX`.
+- `cdp_session`: `cdp_artifacts` plus `/session`. This child directory **must not
+  exist yet**; `serve` creates it.
+
+The examples below use these names as shell variables. If separate tool calls
+start fresh shells, set them again or substitute the recorded absolute paths.
+Keep the same `cdp_session` for every command in the workflow.
+
+Start the owner with your shell tool's persistent-process or terminal facility:
+
+```sh
+"$cdp_bin" --session "$cdp_session" serve
+```
+
+Retain the returned process/terminal handle. `serve` remains running; readiness
+is a stdout JSON record containing `"ok":true` and `"ready":true`, **not process
+exit**. Wait for that record before issuing client commands from another tool
+call. A short-lived exec environment that kills the owner on return cannot
+support this workflow. Do not put blocking `serve` before client commands in the
+same sequential shell script.
+
+For a real application, start its server separately, run `allow ORIGIN` for the
+page/API/asset origins it needs, and then `open URL`. Origins have no path or
+trailing slash. For example, allow `http://127.0.0.1:4180` before opening
+`http://127.0.0.1:4180/`. Add redirect origins when needed. After navigation, use
+`wait` for an application-specific ready condition.
+
+### Inspect, act, and verify
+
+For a self-contained practice session, create this fixture. `content` replaces
+the document; use `open` when working with an actual application.
+
+```sh
+"$cdp_bin" --session "$cdp_session" content '<label>Name<input id="name"></label><button id="save">Save</button><p id="result"></p>'
+"$cdp_bin" --session "$cdp_session" eval 'document.querySelector("#save").onclick=()=>document.querySelector("#result").textContent=document.querySelector("#name").value; true'
+```
+
+Inspect the DOM to discover selectors before acting. Return JSON-compatible
+data, keep inspection bounded, and query additional attributes when needed:
+
+```sh
+"$cdp_bin" --session "$cdp_session" eval 'Array.from(document.querySelectorAll("button,input,select,textarea,a")).filter(e=>e.getClientRects().length && getComputedStyle(e).visibility!=="hidden").slice(0,80).map(e=>({tag:e.tagName,id:e.id,testId:e.getAttribute("data-testid"),text:(e.innerText||e.getAttribute("aria-label")||"").trim().slice(0,120),type:e.getAttribute("type"),disabled:e.matches(":disabled")}))'
+```
+
+The CLI's element commands accept **CSS selectors**. Selectors should resolve to
+one intended element; use observed IDs, test attributes, or scoped selectors.
+There is no CLI accessibility-tree snapshot command. If you need visual context,
+save a screenshot and open the returned local PNG path with your image-viewing
+tool; the command's JSON reply does not itself display an image.
+
+Using the IDs observed in the fixture:
+
+```sh
+"$cdp_bin" --session "$cdp_session" fill '#name' 'Sample'
+"$cdp_bin" --session "$cdp_session" click '#save'
+"$cdp_bin" --session "$cdp_session" wait 'document.querySelector("#result")?.textContent === "Sample"'
+"$cdp_bin" --session "$cdp_session" text '#result'
+"$cdp_bin" --session "$cdp_session" screenshot "$cdp_artifacts/result.png"
+```
+
+Check each command's exit status and JSON `ok` field before continuing. `text`
+should return `{"ok":true,"result":"Sample"}`. A successful `eval` returning
+`false` means the expression evaluated successfully, not that your assertion
+passed. Check its `result`, or use `wait` for an expected condition. Verify the
+effect after each meaningful action; dispatching a click does not establish
+that the application completed its work.
+
+On `OriginNotAllowed`, add the required origin with `allow`. On
+`ElementNotActionable` or a wait timeout, inspect the current DOM/screenshot
+before retrying. A failed wire connection or `SessionFailed` requires closing
+the session and starting a new one. If the owner exited, use a fresh session;
+session state is not restored automatically. See the
+[CLI guide](docs/cli.md#results-and-failures) for limits and error behavior.
+
+### Finish
+
+Always close the session, including when the task fails:
+
+```sh
+"$cdp_bin" --session "$cdp_session" close
+```
+
+`close` acknowledges the shutdown request. Wait for the retained owner process
+to exit; it removes its browser profile, control socket, and session directory.
+If commands cannot reach it, terminate **your recorded owner process** with
+SIGTERM and wait for it. Keep or remove your artifact directory according to the
+task. Sessions otherwise expire after 900 seconds without client activity.
+
 ## Command line
 
 Build once:
