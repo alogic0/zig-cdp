@@ -1,0 +1,8 @@
+.{
+    .name = .zig_cdp,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{ .process = .{ .path = "../zig-process" } },
+    .paths = .{ "build.zig", "build.zig.zon", ".zigversion", "src", "tests", "examples", "docs", "README.md", "DESIGN.md", "CURRENT_STATUS.md", "AGENTS.md" },
+    .fingerprint = 0x59f610c6ec197bfc,
+}
