@@ -2,7 +2,7 @@
 
 Initial standalone extraction and command-line wrapper, October 20, 2026.
 
-Planned acceptance:
+Acceptance scope:
 
 - Standalone `cdp` package with no GUI-framework dependency.
 - Fresh-profile browser launch and exact owned-process cleanup.
@@ -32,4 +32,33 @@ denial, stale interception recovery, owned-profile removal, repeated stop,
 unrelated-child preservation, and parsed response ownership. Browser checks used
 Chrome 155.0.8059.84. They do not establish application acceptance.
 
-The CLI wrapper is the next slice. Consumer adoption is outside this delivery.
+## CLI wrapper
+
+Implemented `zig-cdp serve` and client commands over a private Unix socket.
+Separate client processes share the owned browser page. Commands cover origins,
+navigation/reload, fixture HTML, evaluation, clicks/fill/text/waits, screenshots,
+uploads, downloads, status, and close. Inputs/outputs are JSON with explicit
+failure exit status. File paths resolve in the client. Idle browser events are
+serviced by the same serialized owner. SIGINT/SIGTERM handling stays in the CLI.
+
+| Check | Result |
+| --- | --- |
+| `zig build test-cli --summary all` | Passed against actual Chrome, Debug |
+| Same command with `-Doptimize=ReleaseSafe` | Passed against actual Chrome |
+| `zig build test-cli test check example -Doptimize=ReleaseSafe --summary all` | 10/10 steps; library tests reused passing results, CLI and example executed |
+| Format, documentation links, and diff checks | Passed |
+
+The final CLI checks cover shared DOM state, trusted input events, independent
+sessions, actual local HTTP navigation/reload, background HTTP requests between
+commands, PNG output, exact upload/download bytes, and client-relative paths.
+Negative cases cover malformed/oversized requests, oversized replies, invalid
+origins/arguments, disabled controls, timeouts, JavaScript exceptions, recovery,
+directory collisions, missing executables, and early browser exit. Close, idle
+expiry, and SIGINT/SIGTERM during work remove the session directory and browser
+profile and leave the owned browser PID absent. Closing one session leaves its
+peer usable. These are finite interface checks, not every transport fault.
+
+Delivery is complete for Linux headless sessions with the pinned compiler.
+Headed-window behavior, cross-engine support, indefinite session memory growth,
+SIGKILL recovery, publication, and consumer migration remain outside this scope.
+Both original repositories remain unchanged by this delivery.

@@ -34,4 +34,19 @@ pub fn build(b: *std.Build) void {
     const check = b.step("check", "Compile library tests and example");
     check.dependOn(&tests.step);
     check.dependOn(&example.step);
+    const cli = b.addExecutable(.{
+        .name = "zig-cdp",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "cdp", .module = cdp }},
+        }),
+    });
+    b.installArtifact(cli);
+    check.dependOn(&cli.step);
+    const cli_tests = b.addSystemCommand(&.{"python3"});
+    cli_tests.addFileArg(b.path("tests/cli.py"));
+    cli_tests.addArtifactArg(cli);
+    b.step("test-cli", "Run CLI session acceptance tests (requires Python 3)").dependOn(&cli_tests.step);
 }

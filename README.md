@@ -9,6 +9,36 @@ ownership comes from the sibling [`zig-process`](../zig-process) package.
 Keep both repositories under the same parent directory for the supplied local
 path dependency. Node.js and a browser-driver service are not required.
 
+## Command line
+
+Build once:
+
+```sh
+zig build -Doptimize=ReleaseSafe
+```
+
+The executable is `zig-out/bin/zig-cdp`. Start a session in one terminal, using a
+directory that does not yet exist:
+
+```sh
+./zig-out/bin/zig-cdp --session /tmp/cdp-demo serve \
+  --allow http://127.0.0.1:4180
+```
+
+After the JSON readiness message, use another terminal to control that browser:
+
+```sh
+./zig-out/bin/zig-cdp --session /tmp/cdp-demo open http://127.0.0.1:4180/
+./zig-out/bin/zig-cdp --session /tmp/cdp-demo eval 'document.title'
+./zig-out/bin/zig-cdp --session /tmp/cdp-demo screenshot /tmp/page.png
+./zig-out/bin/zig-cdp --session /tmp/cdp-demo close
+```
+
+Start your web application separately. All commands share one page until you
+close the session. Use `serve --headed` for a visible browser. `--help` lists
+commands; the [CLI guide](docs/cli.md) includes a complete example without a
+server, JSON results, uploads/downloads, and session cleanup.
+
 ## Library
 
 Run the self-contained example:
@@ -27,7 +57,13 @@ input, clicks Save, checks the DOM, and closes the browser. See
 ```sh
 zig build test check example --summary all
 zig build test check example -Doptimize=ReleaseSafe --summary all
+zig build test-cli --summary all
+zig build test-cli -Doptimize=ReleaseSafe --summary all
 ```
+
+The CLI acceptance tests use Python 3's standard library. The library and CLI
+have no Python runtime dependency. The independent package check runs with
+`zig build test` from `tests/package` in either optimization profile.
 
 The compiler uses `-O debug` and `-O safe` for direct compiler invocations;
 `zig build` uses `-Doptimize=Debug` and `-Doptimize=ReleaseSafe`.

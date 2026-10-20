@@ -48,6 +48,8 @@ Requests contain a command and string arguments. Replies distinguish success
 from failure; CLI failures exit nonzero. Bound request/response bytes, socket
 read time, and idle duration. Commands run serially. Broken browser connections
 require a new session; ordinary locator or evaluation errors can be corrected.
+The same owner services browser events between commands. Accept results retain
+their resource owner even when arrival races a timer or shutdown.
 The session arena retains browser observations until session exit; this first
 version is for finite automation sessions, not indefinite daemon workloads.
 
