@@ -42,7 +42,8 @@ CDP, accessibility, browser-version, or cross-engine compatibility.
 
 `zig-cdp --session PATH serve` exclusively creates a private session directory
 and listens on its Unix socket. It stays in the foreground and owns one browser
-and page. Independent CLI calls use `--session PATH` to address that same page.
+and browser context, with one selected page. Independent CLI calls use
+`--session PATH` to address that selection.
 Multiple sessions use distinct directories and processes. No detached daemon,
 global service, fixed TCP control port, or saved user browser profile is needed.
 `--user-data-dir` explicitly selects an existing profile and its default context
@@ -63,16 +64,31 @@ Requests contain a command and string arguments. Replies distinguish success
 from failure; CLI failures exit nonzero. Bound request/response bytes, socket
 read time, and idle duration. Commands run serially. Broken browser connections
 require a new session; ordinary locator or evaluation errors can be corrected.
-The same owner services browser events between commands. Accept results retain
-their resource owner even when arrival races a timer or shutdown.
+The same owner services events for every attached page between commands. Accept
+results retain their resource owner even when arrival races a timer or shutdown.
 The session arena retains browser observations until session exit; this first
 version is for finite automation sessions, not indefinite daemon workloads.
 
 Supported operations cover status, origins, navigation, reload, setting fixture
 HTML, JavaScript evaluation, CSS-based click/fill/text/wait/upload/download,
-screenshots, and close. File paths resolve in the client's working directory.
+screenshots, tab management, and close. File paths resolve in the client's
+working directory.
 Origins are explicit CLI policy and may be extended during a session. Workflow
 assertions, credential handling, and reports remain with the caller.
+
+Tab commands use stable CDP target IDs and stay within the initial context.
+Listing excludes internal browser targets and other contexts. New tabs share
+cookies/storage and are attached before navigation; switching retains each
+page's connection, DOM state, and interception. The CLI owns selection separately
+from desktop focus. Origins and timeout settings apply across controlled tabs.
+Closing a tab detaches its connection without disposing the context. Closing the
+last tab creates a blank replacement before closing it. Externally closed tabs
+are reconciled against Chrome's target list, and selection recovers to a survivor.
+Browser shutdown remains the final context/process cleanup owner.
+
+The library exposes context-scoped `tabs`, `newTab`, and `attachTab`, plus target
+closure and connection-only `Page.detach`. Only a Page created by `Browser.page`
+owns its isolated context. Borrowed sibling/attached pages never dispose it.
 
 ## Delivery and verification
 

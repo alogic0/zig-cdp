@@ -82,6 +82,99 @@ def page_targets(server):
         return [target for target in json.load(reply) if target["type"] == "page"]
 
 
+def browser_request(server, path, method="GET"):
+    request = urllib.request.Request(f'http://127.0.0.1:{server.ready["port"]}' + path, method=method)
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return response.read()
+
+
+def exercise_tabs(server, origin, root):
+    session = server.path
+    original = command(session, "tabs")
+    assert len(original) == 1 and original[0]["selected"], original
+    first = original[0]["id"]
+    assert command(session, "status")["tab_id"] == first
+    for args in (("tabs", "extra"), ("new-tab", "one", "two"), ("switch-tab",), ("close-tab", "one", "two")):
+        assert command(session, *args, ok=False) == "WrongArgumentCount"
+    command(session, "content", '<title>First tab</title><input id="name"><p id="value">first</p>')
+    command(session, "fill", "#name", "kept in first")
+    command(session, "eval", "localStorage.setItem('tabs-shared','yes'); document.cookie='tabs_shared=yes; Max-Age=3600; SameSite=Lax'; true")
+    command(session, "timeout", "5000")
+    second = command(session, "new-tab", origin + "/")["id"]
+    assert second != first
+    assert command(session, "status")["timeout_ms"] == 5000
+    assert command(session, "eval", "localStorage.getItem('tabs-shared')") == "yes"
+    assert command(session, "eval", "document.cookie.includes('tabs_shared=yes')") is True
+    command(session, "content", '<title>Second tab</title><input id="name"><p id="value">second</p>')
+    command(session, "fill", "#name", "kept in second")
+    listed = command(session, "tabs")
+    assert {tab["title"] for tab in listed} == {"First tab", "Second tab"}
+    assert [tab["id"] for tab in listed if tab["selected"]] == [second]
+    assert command(session, "switch-tab", first)["id"] == first
+    assert command(session, "text", "#value") == "first"
+    assert command(session, "eval", "document.querySelector('#name').value") == "kept in first"
+    assert command(session, "status")["timeout_ms"] == 5000
+    assert command(session, "switch-tab", second)["id"] == second
+    assert command(session, "text", "#value") == "second"
+    assert command(session, "eval", "document.querySelector('#name').value") == "kept in second"
+
+    # A later allow command must update every attached page, including inactive
+    # ones. Its delayed request must complete while the owner is idle on a peer.
+    other_origin = origin.replace("127.0.0.1", "localhost")
+    command(session, "allow", other_origin)
+    Fixture.background_seen.clear()
+    command(session, "eval", f"setTimeout(() => fetch({json.dumps(other_origin + '/background')}), 200); true")
+    command(session, "switch-tab", first)
+    assert Fixture.background_seen.wait(timeout=5), "inactive tab stopped processing requests"
+
+    before = command(session, "tabs")
+    assert command(session, "new-tab", "https://example.invalid/", ok=False) == "OriginNotAllowed"
+    assert command(session, "tabs") == before
+    for op in ("switch-tab", "close-tab"):
+        assert command(session, op, "missing-target", ok=False) == "TabNotFound"
+    assert command(session, "eval", "true") is True
+
+    # Discover a tab created outside this CLI. A temporary session must refuse
+    # the browser's unrelated default context; a saved-profile session adopts it.
+    external = json.loads(browser_request(server, "/json/new?about:blank", "PUT"))["id"]
+    if server.ready["persistent_profile"]:
+        assert external in {tab["id"] for tab in command(session, "tabs")}
+        assert command(session, "switch-tab", external)["id"] == external
+        command(session, "content", "<title>External tab</title><p>attached</p>")
+        assert command(session, "text", "p") == "attached"
+        assert command(session, "close-tab")["closed"] == external
+    else:
+        assert external not in {tab["id"] for tab in command(session, "tabs")}
+        for op in ("switch-tab", "close-tab"):
+            assert command(session, op, external, ok=False) == "TabNotFound"
+        browser_request(server, "/json/close/" + external)
+
+    command(session, "switch-tab", first)
+    assert command(session, "close-tab", second) == {"closed": second, "selected": first}
+    assert command(session, "text", "#value") == "first"
+    blank = command(session, "new-tab")
+    assert blank["url"] == "about:blank" and blank["selected"]
+    assert command(session, "close-tab") == {"closed": blank["id"], "selected": first}
+
+    # An external close of the selected tab must recover to its surviving peer.
+    doomed = command(session, "new-tab")["id"]
+    browser_request(server, "/json/close/" + doomed)
+    assert command(session, "status")["tab_id"] == first
+    assert command(session, "text", "#value") == "first"
+
+    # Closing the original owning Page must not dispose the shared context.
+    replacement = command(session, "close-tab")
+    assert replacement["closed"] == first and replacement["selected"] != first
+    remaining = command(session, "tabs")
+    assert len(remaining) == 1 and remaining[0]["url"] == "about:blank"
+    command(session, "open", origin + "/")
+    assert command(session, "eval", "localStorage.getItem('tabs-shared')") == "yes"
+    assert command(session, "eval", "document.cookie.includes('tabs_shared=yes')") is True
+    command(session, "screenshot", str(root / "tabs.png"))
+    assert (root / "tabs.png").read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
+    command(session, "timeout", "30000")
+
+
 class Fixture(http.server.BaseHTTPRequestHandler):
     background_seen = threading.Event()
 
@@ -178,6 +271,7 @@ def main():
                     assert command(session_path, "eval", "document.title") == "Fixture"
                     command(session_path, "eval", "setTimeout(() => fetch('/background'), 200); true")
                     assert Fixture.background_seen.wait(timeout=5), "idle session did not process a background request"
+                    exercise_tabs(server, origin, root)
                 finally:
                     fixture_server.shutdown()
                     thread.join(timeout=5)
@@ -248,6 +342,7 @@ def main():
                             assert len(page_targets(server)) == 1
                             command(server.path, "open", origin + "/")
                             if index == 0:
+                                exercise_tabs(server, origin, root)
                                 command(server.path, "eval", "localStorage.setItem('saved','fixture'); document.cookie='saved=fixture; Max-Age=3600; SameSite=Lax'; true")
                                 command(server.path, "eval", "const a=document.createElement('a'); a.id='export'; a.href='data:text/plain,saved-profile-download'; a.download='saved.txt'; a.textContent='Download'; document.body.append(a); true")
                                 command(server.path, "download", "#export", str(root / "saved.txt"))

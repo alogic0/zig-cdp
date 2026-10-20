@@ -9,7 +9,11 @@ const help =
     \\      [--user-data-dir PATH] [--idle-timeout SECONDS]
     \\                                Own a persistent browser (foreground)
     \\status                           Browser version, URL, and session state
-    \\allow ORIGIN                     Allow an HTTP(S) origin for this page
+    \\tabs                             List tab IDs, titles, URLs, and selection
+    \\new-tab [URL]                    Create and select a tab (default blank)
+    \\switch-tab ID                    Select a tab for subsequent commands
+    \\close-tab [ID]                   Close a tab (default selected)
+    \\allow ORIGIN                     Allow an HTTP(S) origin for session tabs
     \\open URL                         Navigate the existing page
     \\reload                           Reload the page
     \\content HTML                     Replace the document with fixture HTML

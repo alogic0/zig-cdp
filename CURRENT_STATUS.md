@@ -124,3 +124,39 @@ The existing headless fixture also verifies its 1280 × 720 dimensions.
 - Removed the live page's override through CDP without restarting the browser.
   Its viewport changed from 1280 × 720 to the actual 1919 × 992 content area.
   The existing profile, window, and debugging port remain in use.
+
+## CLI tab management
+
+Added `tabs`, `new-tab [URL]`, `switch-tab ID`, and `close-tab [ID]`. Replies use
+stable target IDs, titles, URLs, and an explicit CLI selection; `status` includes
+`tab_id`. Tabs share the session's initial context and cookies/storage. Page
+commands follow the selected tab without reloading other documents. Context
+scope excludes browser UI, workers, and other contexts/sessions.
+
+The library now exposes tab listing, creation, attachment, and target closure.
+Borrowed tab connections do not dispose shared contexts, and `Page.detach`
+explicitly releases just a connection. The CLI retains attached pages, applies
+origins/timeouts across them, pumps them between commands, and reconciles tabs
+closed externally. Closing the final tab creates a blank replacement before
+removing the old one; `close` retains its whole-session meaning. Commands remain
+serial, so other pages are serviced between long-running commands.
+
+Verification with the pinned compiler and Chrome 155.0.8059.84:
+
+- Debug `test-cli` passed; `test-headed test check` passed (9/9 build steps,
+  9/9 library tests and 1/1 headed test).
+- ReleaseSafe `test-cli test-headed test check install` passed (13/13 build
+  steps, 9/9 library tests and 1/1 headed test).
+- CLI tests cover both temporary and saved-profile modes: tab identity and
+  selection, preserved form values, shared cookies/storage, optional URL and
+  blank creation, origin denial without creating a tab, invalid arguments/IDs,
+  context exclusion, externally opened/closed tabs, inactive background requests,
+  inactive/selected/final-tab closure, screenshots, and session cleanup.
+- The headed Xvfb regression verifies new tabs use the same context window,
+  retain native viewport sizing, and preserve document state after reattachment.
+- Used the installed executable directly across fresh shell calls to list,
+  create, switch, inspect, and close tabs. The demo owner exited cleanly and its
+  browser/profile/session were removed. No helper script was needed for control.
+
+The executable and guides are updated. Existing `serve` owners retain their old
+code and require a restart to use the new tab commands.

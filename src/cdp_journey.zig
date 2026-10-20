@@ -180,7 +180,7 @@ pub const Browser = struct {
         const context = str(field(try self.command("Target.createBrowserContext", .{}), "browserContextId"));
         errdefer _ = self.command("Target.disposeBrowserContext", .{ .browserContextId = context }) catch {};
         const id = str(field(try self.command("Target.createTarget", .{ .url = "about:blank", .browserContextId = context }), "targetId"));
-        return self.connectPage(id, context, origins);
+        return self.connectPage(id, context, origins, true);
     }
     /// Reuse the startup blank tab in the profile's default (non-incognito)
     /// context. Page.close detaches; Browser.stop closes the owned browser.
@@ -196,17 +196,64 @@ pub const Browser = struct {
             if (contexts == .array) for (contexts.array.items) |context| {
                 if (std.mem.eql(u8, str(context), str(field(target, "browserContextId")))) isolated = true;
             };
-            if (!isolated) return self.connectPage(str(field(target, "targetId")), "", origins);
+            if (!isolated) return self.connectPage(str(field(target, "targetId")), "", origins, false);
         };
         const id = str(field(try self.command("Target.createTarget", .{ .url = "about:blank" }), "targetId"));
-        return self.connectPage(id, "", origins);
+        return self.connectPage(id, "", origins, false);
     }
-    fn connectPage(self: *Browser, id: []const u8, context: []const u8, origins: []const []const u8) !*Page {
+    pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
+
+    /// List page targets in one context. An empty context selects the profile's
+    /// default context; Chrome's internal UI and workers are excluded.
+    pub fn tabs(self: *Browser, context: []const u8) ![]const Tab {
+        const contexts = if (context.len == 0) field(try self.command("Target.getBrowserContexts", .{}), "browserContextIds") else .null;
+        const targets = field(try self.command("Target.getTargets", .{}), "targetInfos");
+        var result: std.ArrayList(Tab) = .empty;
+        if (targets == .array) for (targets.array.items) |target| {
+            if (!std.mem.eql(u8, str(field(target, "type")), "page")) continue;
+            const target_context = str(field(target, "browserContextId"));
+            if (context.len != 0) {
+                if (!std.mem.eql(u8, context, target_context)) continue;
+            } else {
+                var isolated = false;
+                if (contexts == .array) for (contexts.array.items) |id| {
+                    if (std.mem.eql(u8, str(id), target_context)) isolated = true;
+                };
+                if (isolated) continue;
+            }
+            try result.append(self.a, .{ .id = str(field(target, "targetId")), .title = str(field(target, "title")), .url = str(field(target, "url")) });
+        };
+        return result.toOwnedSlice(self.a);
+    }
+    /// Create a blank tab sharing the specified context. The page connection
+    /// does not own/dispose that context. Navigate after interception is ready.
+    pub fn newTab(self: *Browser, context: []const u8, origins: []const []const u8) !*Page {
+        const result = if (context.len == 0)
+            try self.command("Target.createTarget", .{ .url = "about:blank", .newWindow = false })
+        else
+            try self.command("Target.createTarget", .{ .url = "about:blank", .browserContextId = context, .newWindow = false });
+        const id = str(field(result, "targetId"));
+        errdefer self.closeTab(id) catch {};
+        return self.connectPage(id, context, origins, false);
+    }
+    /// Attach to an existing page in the specified context without navigation.
+    pub fn attachTab(self: *Browser, id: []const u8, context: []const u8, origins: []const []const u8) !*Page {
+        for (try self.tabs(context)) |tab| {
+            if (std.mem.eql(u8, tab.id, id)) return self.connectPage(tab.id, context, origins, false);
+        }
+        return error.TabNotFound;
+    }
+    /// Close only the target, leaving its shared context and other tabs alive.
+    /// Detach any Page connection for this target after closing it.
+    pub fn closeTab(self: *Browser, id: []const u8) !void {
+        if (!boolean(field(try self.command("Target.closeTarget", .{ .targetId = id }), "success"))) return error.TabNotFound;
+    }
+    fn connectPage(self: *Browser, id: []const u8, context: []const u8, origins: []const []const u8, owns_context: bool) !*Page {
         const ws = try self.a.print("/devtools/page/{s}", .{id});
         var socket = try self.client.connectWs(ws);
         errdefer socket.close();
         const p = try self.a.create(Page);
-        p.* = .{ .browser = self, .a = self.a, .io = self.io, .socket = socket, .context = context, .target = id, .origins = origins };
+        p.* = .{ .browser = self, .a = self.a, .io = self.io, .socket = socket, .context = context, .owns_context = owns_context, .target = id, .origins = origins };
         p.socket.event_context = p;
         p.socket.event_handler = Page.onEvent;
         _ = try p.command("Page.enable", .{});
@@ -310,6 +357,7 @@ pub const Page = struct {
     io: std.Io,
     socket: cdp.WsSession,
     context: []const u8,
+    owns_context: bool,
     target: []const u8,
     origins: []const []const u8,
     requests: std.ArrayList(*Request) = .empty,
@@ -321,10 +369,16 @@ pub const Page = struct {
 
     pub fn close(self: *Page) void {
         if (self.closed) return;
+        self.detach();
+        if (self.owns_context)
+            _ = self.browser.command("Target.disposeBrowserContext", .{ .browserContextId = self.context }) catch {};
+    }
+    /// Release the connection without closing the tab or disposing its context.
+    /// The caller must eventually dispose that context or stop the browser.
+    pub fn detach(self: *Page) void {
+        if (self.closed) return;
         self.closed = true;
         self.socket.close();
-        if (self.context.len != 0)
-            _ = self.browser.command("Target.disposeBrowserContext", .{ .browserContextId = self.context }) catch {};
     }
     pub fn command(self: *Page, method: []const u8, params: anytype) !V {
         return commandValue(self.a, &self.socket, method, params);

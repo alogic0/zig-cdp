@@ -3,6 +3,8 @@
 Build with the pinned Zig compiler using `zig build -Doptimize=ReleaseSafe`.
 Use `zig-out/bin/zig-cdp` directly or install with a prefix of your choice:
 `zig build -Doptimize=ReleaseSafe --prefix /your/prefix`.
+Restart `serve` to pick up commands added by a rebuild; existing owners continue
+running their original code.
 
 ## A complete session
 
@@ -31,7 +33,7 @@ session=/tmp/cdp-demo
 ```
 
 The `text` command prints `{"ok":true,"result":"Sample"}`. Commands run in
-separate processes but share the same browser page, variables, cookies, and DOM.
+separate processes and act on the selected tab, preserving its variables and DOM.
 This fixture needs no web server. By default a session uses a fresh browser
 profile and isolated context.
 
@@ -79,6 +81,53 @@ Page interception blocks other unlisted requests. `about:blank`, `data:`, and
 `blob:` are allowed. This is page interception, not network containment of the
 whole browser process.
 
+## Tabs
+
+```sh
+"$cdp" --session "$session" tabs
+"$cdp" --session "$session" new-tab
+"$cdp" --session "$session" new-tab http://127.0.0.1:4180/
+```
+
+`tabs` returns an array of `{id,title,url,selected}` objects. The `id` is Chrome's
+stable target ID, not an index. `new-tab` accepts zero or one URL, selects the new
+tab, and returns its object in the same shape. A supplied URL must already be
+allowed, just like `open`; a denied URL creates no tab.
+
+Record an ID from the JSON response as `tab_id` and pass it to:
+
+```sh
+"$cdp" --session "$session" switch-tab "$tab_id"
+"$cdp" --session "$session" eval 'document.title'
+"$cdp" --session "$session" close-tab "$tab_id"
+```
+
+`switch-tab` brings the tab forward and directs subsequent page commands to it.
+Its response is `{id,title,url,selected:true}`. It attaches to an existing page
+without reloading it, so DOM state and form values remain. `status.tab_id` also
+reports the selected ID. Selection belongs to the CLI: manually clicking another
+Chrome tab does not change which tab a later CLI command controls.
+
+`close-tab [ID]` closes only that tab; omitting ID uses the selected tab. The
+reply is `{closed:ID,selected:ID}`. Closing an inactive tab preserves selection;
+closing the selected tab selects a surviving tab. Closing the final tab first
+creates a blank replacement to keep the browser and shared context alive.
+`close` still shuts down the whole browser session.
+
+Only page targets in the session's browser context are listed and selectable.
+Temporary sessions share one isolated context. Saved-profile sessions use the
+default context and can list/select tabs opened manually or restored by Chrome.
+Browser UI, workers, other contexts, and other browser sessions are excluded.
+Unknown, closed, or out-of-context IDs fail with `TabNotFound`.
+
+All tabs in this context share cookies and origin storage. `allow` and `timeout`
+apply to existing controlled tabs and later attachments. Interception starts
+when the CLI attaches to a tab. Between commands the owner pumps every attached
+page, including inactive tabs, so their background requests can finish. Commands
+remain serial; a long-running command postpones servicing other pages. A tab
+closed externally is removed and a surviving tab is selected automatically; if
+Chrome itself exits, start a new session.
+
 ## Commands
 
 Put `--session PATH` before the command. Quote CSS, HTML, and JavaScript so the
@@ -86,8 +135,12 @@ shell passes each as one argument. All element commands use CSS selectors.
 
 | Command | Behavior |
 | --- | --- |
-| `status` | Return browser version, URL, origins, timeout, profile mode/path, and CDP port. |
-| `allow ORIGIN` | Add an origin to this page's allowlist. |
+| `status` | Return browser version, selected `tab_id`, URL, origins, timeout, profile, and CDP port. |
+| `tabs` | List tab IDs, titles, URLs, and CLI selection in this context. |
+| `new-tab [URL]` | Create and select a tab; defaults to `about:blank`. |
+| `switch-tab ID` | Select an existing tab without reloading it. |
+| `close-tab [ID]` | Close one tab; defaults to the selected tab. |
+| `allow ORIGIN` | Add an origin for all controlled tabs in this session. |
 | `open URL` | Navigate and wait for the new document to finish loading. |
 | `reload` | Reload the current page. |
 | `content HTML` | Replace the document with fixture HTML. |
@@ -96,7 +149,7 @@ shell passes each as one argument. All element commands use CSS selectors.
 | `fill CSS TEXT` | Fill a form input using browser text input. |
 | `text CSS` | Read one element's `innerText`. |
 | `wait JAVASCRIPT` | Wait for the expression to return boolean `true`. |
-| `timeout MILLISECONDS` | Set the page timeout, from 1 to 120000. |
+| `timeout MILLISECONDS` | Set the timeout for session tabs, from 1 to 120000. |
 | `screenshot PATH` | Write a PNG. |
 | `upload CSS PATH` | Set a file input to an existing local file. |
 | `download CSS PATH` | Click a control and save the completed download. |
@@ -172,7 +225,8 @@ the CLI never deletes pre-existing session directories automatically.
 Browser observations and values stay in an arena for the session's lifetime.
 Close and restart between long workflows; this version is intended for finite
 automation sessions rather than an indefinite browser daemon. The owner services
-browser events between commands so background requests can finish while idle.
+events for all attached tabs between commands so background requests can finish
+while idle.
 Headless automation and cleanup have finite test coverage. Automated Xvfb checks
 cover native viewport resizing in default and isolated contexts. One X11
 saved-profile window was also checked manually. These checks do not establish

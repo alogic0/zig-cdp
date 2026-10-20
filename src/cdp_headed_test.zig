@@ -1,7 +1,7 @@
 const std = @import("std");
 const J = @import("cdp").journey;
 
-test "headed default and isolated pages follow window resizing" {
+test "headed tabs share their context window and follow resizing" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const browser = try J.Browser.startWithOptions(arena.allocator(), std.testing.io, .{ .headless = false });
@@ -23,5 +23,18 @@ test "headed default and isolated pages follow window resizing" {
         const after = try page.eval("({w:innerWidth,h:innerHeight,ow:outerWidth,oh:outerHeight})");
         try std.testing.expectEqual(J.number(J.field(before, "ow")) - J.number(J.field(after, "ow")), J.number(J.field(before, "w")) - J.number(J.field(after, "w")));
         try std.testing.expectEqual(J.number(J.field(before, "oh")) - J.number(J.field(after, "oh")), J.number(J.field(before, "h")) - J.number(J.field(after, "h")));
+        const sibling = try browser.newTab(page.context, &.{});
+        defer sibling.detach();
+        const sibling_window = try browser.command("Browser.getWindowForTarget", .{ .targetId = sibling.target });
+        try std.testing.expectEqual(window_id, J.number(J.field(sibling_window, "windowId")));
+        try sibling.wait("innerWidth>800 && innerWidth<=outerWidth && outerWidth<=902");
+        _ = try sibling.eval("window.kept = 'same document'; true");
+        sibling.close();
+        const attached = try browser.attachTab(sibling.target, page.context, &.{});
+        defer attached.detach();
+        try std.testing.expectEqualStrings("same document", J.str(try attached.eval("window.kept")));
+        try browser.closeTab(sibling.target);
+        attached.detach();
+        try std.testing.expect(J.boolean(try page.eval("true")));
     }
 }

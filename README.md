@@ -15,7 +15,8 @@ Use the **CLI through shell/exec tools** for browser control. You do not need to
 write or compile a Zig program for each task. This executable is not an MCP
 server. Build it once with `zig build -Doptimize=ReleaseSafe` from this repository
 if `zig-out/bin/zig-cdp` is missing. Run `zig-out/bin/zig-cdp --help` to discover
-the available commands.
+the available commands. After rebuilding, start a new `serve` process to use new
+commands; an already-running owner keeps its original executable code.
 
 ### Start and retain a session
 
@@ -58,6 +59,34 @@ page/API/asset origins it needs, and then `open URL`. Origins have no path or
 trailing slash. For example, allow `http://127.0.0.1:4180` before opening
 `http://127.0.0.1:4180/`. Add redirect origins when needed. After navigation, use
 `wait` for an application-specific ready condition.
+
+### Manage tabs
+
+Use these commands with the same session path:
+
+```sh
+"$cdp_bin" --session "$cdp_session" tabs
+"$cdp_bin" --session "$cdp_session" new-tab
+```
+
+`tabs` returns objects with `id`, `title`, `url`, and `selected`. `new-tab` opens
+and selects a blank tab; optionally pass an allowed URL. Record the returned
+`id` as `tab_id`, then use it directly:
+
+```sh
+"$cdp_bin" --session "$cdp_session" switch-tab "$tab_id"
+"$cdp_bin" --session "$cdp_session" close-tab "$tab_id"
+```
+
+Page commands act on the CLI-selected tab. Clicking another tab in Chrome does
+not change this selection. Tab IDs stay stable until closed; never use a list
+position as an ID. Tabs share the session's browser context, cookies, allowed
+origins, and timeout. Their DOM state is preserved when switching.
+
+`close-tab` without an ID closes the selected tab and selects a remaining tab.
+Closing the last tab creates a blank replacement so the session remains usable.
+Use `close` to shut down the entire session. See the [tab guide](docs/cli.md#tabs)
+for context scope, externally opened tabs, and result shapes.
 
 ### Inspect, act, and verify
 
@@ -146,9 +175,9 @@ After the JSON readiness message, use another terminal to control that browser:
 ./zig-out/bin/zig-cdp --session /tmp/cdp-demo close
 ```
 
-Start your web application separately. All commands share one page until you
-close the session. Use `serve --headed` for a visible browser. `--help` lists
-commands; the [CLI guide](docs/cli.md) includes a complete example without a
+Start your web application separately. Page commands use the selected tab; use
+`new-tab` or `switch-tab` to change it. Use `serve --headed` for a visible browser.
+`--help` lists commands; the [CLI guide](docs/cli.md) includes a complete example without a
 server, saved-profile usage, JSON results, uploads/downloads, and session cleanup.
 
 ## Library

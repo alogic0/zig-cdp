@@ -65,6 +65,30 @@ and the launched child's profile lock before connecting.
 Closing this page detaches; stopping the browser closes the owned process.
 The CLI uses this method when `--user-data-dir` is supplied.
 
+To manage multiple tabs within one context:
+
+```zig
+for (try browser.tabs(page.context)) |tab|
+    std.debug.print("{s} {s}\n", .{ tab.id, tab.url });
+const sibling = try browser.newTab(page.context, page.origins);
+const id = sibling.target;
+sibling.detach();
+const attached = try browser.attachTab(id, page.context, page.origins);
+defer attached.detach();
+try browser.closeTab(id);
+```
+
+An empty context ID means the default profile context. `tabs` excludes browser
+UI and workers. `newTab` creates a blank tab; configure allowed origins before
+navigating it. `attachTab` validates context membership and preserves the current
+document. Use one connection per page at a time. These connections borrow the
+context: their `close()` only detaches.
+The original page returned by `browser.page()` owns its isolated context and
+disposes that entire context on `close()`. `detach()` always releases only the
+connection, leaving both tab and context alive; the caller must eventually
+dispose the context or stop the browser. `browser.closeTab(id)` closes one target
+without disposing the context. Detach its Page connection afterward.
+
 Close pages, stop the browser, then destroy the arena, in that order.
 `stop()` is idempotent. It bounds the graceful
 protocol close and process wait separately to two seconds each, then force-cleans
