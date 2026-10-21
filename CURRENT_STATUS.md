@@ -15,6 +15,12 @@ Debug with two CPUs and ReleaseSafe with one CPU. All six CLI groups pass;
 descriptors remain seven. CI now runs the complete CLI suite with one CPU in
 both profiles so additional runner cores cannot hide this regression.
 
+The hosted single-CPU CLI checks pass both modes. A subsequent Debug headed
+resize assertion failed. The headed fixture now activates each document before
+observing its viewport and reports native bounds, visibility, scale and page
+geometry on failure. Its existing size tolerances and three-second deadline
+are unchanged; the focused headed check passes locally in both modes.
+
 CI also tests the exact bundled HTTP 0.2.1 and support 0.1.0 archives in both
 profiles, including examples and isolated consumers with empty package caches.
 All four provider jobs passed the first hosted run; its two CLI failures are
