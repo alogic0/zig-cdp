@@ -1,6 +1,7 @@
 //! Executable-only session policy and local command transport.
 const std = @import("std");
 const J = @import("cdp").journey;
+const Agent = @import("cdp").agent;
 const A = std.mem.Allocator;
 const V = std.json.Value;
 const Stream = std.Io.net.Stream;
@@ -11,18 +12,43 @@ pub const Options = struct {
     origins: []const []const u8 = &.{},
     idle_seconds: u32 = 900,
 };
-pub const Request = struct { command: []const u8, args: []const []const u8 };
+pub const Request = struct {
+    command: []const u8,
+    args: []const []const u8 = &.{},
+    locator: ?Agent.Query = null,
+    tab: ?[]const u8 = null,
+    timeout_ms: ?u32 = null,
+    limit: usize = 20_000,
+    state: []const u8 = "visible",
+    full_page: bool = false,
+    modern: bool = false,
+};
 const max_request = 1024 * 1024;
 const max_response = 16 * 1024 * 1024;
 
-const Op = enum { status, tabs, @"new-tab", @"switch-tab", @"close-tab", allow, open, reload, content, eval, click, fill, text, wait, timeout, screenshot, upload, download, close };
+const Op = enum { status, tabs, @"new-tab", @"switch-tab", @"close-tab", allow, open, reload, content, eval, click, fill, text, read, snapshot, select, press, wait, timeout, screenshot, upload, download, close };
 
-pub fn operation(command: []const u8, argc: usize) !Op {
-    const op = std.meta.stringToEnum(Op, command) orelse return error.UnknownCommand;
+pub fn operation(input: Request) !Op {
+    const op = std.meta.stringToEnum(Op, input.command) orelse return error.UnknownCommand;
+    const argc = input.args.len;
+    if (input.tab != null and (op == .close or op == .allow or op == .timeout or op == .tabs or op == .@"new-tab" or op == .@"switch-tab")) return error.InvalidOption;
+    if (input.limit == 0 or input.limit > 1024 * 1024) return error.InvalidLimit;
+    if (input.timeout_ms) |ms| if (ms == 0 or ms > 120000) return error.InvalidTimeout;
+    if (input.locator) |query| {
+        try query.validate();
+        const valid = switch (op) {
+            .click, .text, .read, .wait => argc == 0,
+            .fill, .select, .press, .upload, .download => argc == 1,
+            else => return error.InvalidLocator,
+        };
+        if (!valid) return error.WrongArgumentCount;
+        return op;
+    }
     const valid = switch (op) {
-        .status, .tabs, .reload, .close => argc == 0,
-        .@"new-tab", .@"close-tab" => argc <= 1,
-        .fill, .upload, .download => argc == 2,
+        .status, .tabs, .reload, .close, .read, .snapshot => argc == 0,
+        .@"new-tab" => argc <= 1,
+        .@"close-tab" => argc <= 1 and !(input.tab != null and argc != 0),
+        .fill, .select, .upload, .download => argc == 2,
         else => argc == 1,
     };
     if (!valid) return error.WrongArgumentCount;
@@ -68,7 +94,9 @@ pub fn serve(backing: A, io: std.Io, options: Options) !void {
 
     const browser = try J.Browser.startWithOptions(a, io, options.browser);
     defer browser.stop();
+    browser.socket.alloc = backing;
     const page = if (browser.persistent_profile) try browser.profilePage(&.{}) else try browser.page(&.{});
+    page.socket.alloc = backing;
     defer page.detach();
     var state: State = .{ .browser = browser, .context = page.context, .page = page };
     defer state.deinit();
@@ -145,11 +173,19 @@ fn respond(a: A, io: std.Io, stream: Stream, state: *State) ![]const u8 {
     const line = try readLine(a, io, stream, .{ .limit = max_request, .timeout_ms = 5000 });
     const parsed = std.json.parseFromSlice(Request, a, line, .{}) catch return error.InvalidRequest;
     defer parsed.deinit();
-    const op = try operation(parsed.value.command, parsed.value.args.len);
-    const value = try state.execute(op, parsed.value.args);
-    const reply = try J.json(a, .{ .ok = true, .result = value });
+    var diagnostics: Agent.Diagnostics = .{};
+    _ = operation(parsed.value) catch |err| return failure(a, parsed.value, err, diagnostics);
+    const value = state.execute(a, parsed.value, &diagnostics) catch |err| {
+        if (err == error.Canceled) return err;
+        return failure(a, parsed.value, err, diagnostics);
+    };
+    const reply = try J.json(a, .{ .ok = true, .result = value, .command = parsed.value.command, .tab = parsed.value.tab orelse state.page.target });
     if (reply.len > max_response) return error.ResponseTooLarge;
     return reply;
+}
+
+pub fn failure(a: A, input: Request, err: anyerror, diagnostics: Agent.Diagnostics) ![]const u8 {
+    return J.json(a, .{ .ok = false, .err = @errorName(err), .command = input.command, .tab = input.tab, .@"error" = .{ .code = @errorName(err), .phase = diagnostics.phase, .match_count = diagnostics.match_count, .action = diagnostics.action } });
 }
 
 const State = struct {
@@ -183,6 +219,7 @@ const State = struct {
         for (self.pages.items) |page| if (std.mem.eql(u8, page.target, id)) return page;
         const page = try self.browser.attachTab(id, self.context, self.origins.items);
         errdefer page.detach();
+        page.socket.alloc = self.browser.socket.alloc;
         page.timeout_ms = self.timeout_ms;
         try self.pages.append(self.browser.a, page);
         return page;
@@ -203,6 +240,7 @@ const State = struct {
         }
         if (tabs.len == 0) {
             const page = try self.browser.newTab(self.context, self.origins.items);
+            page.socket.alloc = self.browser.socket.alloc;
             errdefer page.detach();
             page.timeout_ms = self.timeout_ms;
             try self.pages.append(self.browser.a, page);
@@ -233,6 +271,7 @@ const State = struct {
         const url = if (input) |value| J.str(try self.page.evaluate("url => new URL(url).href", value)) else "about:blank";
         if (!self.permitted(url)) return error.OriginNotAllowed;
         const page = try self.browser.newTab(self.context, self.origins.items);
+        page.socket.alloc = self.browser.socket.alloc;
         errdefer {
             self.browser.closeTab(page.target) catch {};
             page.detach();
@@ -254,6 +293,7 @@ const State = struct {
         if (replacing_last) {
             // Keep the browser/context alive when closing its final tab.
             next = try self.browser.newTab(self.context, self.origins.items);
+            next.socket.alloc = self.browser.socket.alloc;
             next.timeout_ms = self.timeout_ms;
         } else if (closing_selected) {
             for (tabs) |tab| if (!std.mem.eql(u8, tab.id, id)) {
@@ -292,7 +332,99 @@ const State = struct {
         }
         return false;
     }
-    fn execute(self: *State, op: Op, args: []const []const u8) !V {
+    fn execute(self: *State, a: A, input: Request, diagnostics: *Agent.Diagnostics) !V {
+        const op = try operation(input);
+        switch (op) {
+            .read, .snapshot, .click, .fill, .text, .select, .press, .upload, .download, .screenshot, .open, .reload, .content, .eval, .wait, .status => {},
+            .@"close-tab" => return self.executeLegacy(op, if (input.tab) |id| &.{id} else input.args),
+            else => return self.executeLegacy(op, input.args),
+        }
+        if (self.failed) return error.SessionFailed;
+        _ = try self.refresh();
+        const p = if (input.tab) |id| blk: {
+            if (!contains(try self.browser.tabs(self.context), id)) return error.TabNotFound;
+            break :blk try self.obtain(id);
+        } else self.page;
+        var page = try Agent.Page.init(a, p.io, &p.socket, input.timeout_ms orelse @as(u32, @intCast(self.timeout_ms)), diagnostics);
+        defer page.deinit();
+        const query: Agent.Query = input.locator orelse .{ .selector = if (input.args.len > 0) input.args[0] else "body" };
+        const value_index: usize = if (input.locator == null) 1 else 0;
+        switch (op) {
+            .status => return J.val(a, .{ .browser = self.browser.version, .url = J.str(try page.eval("location.href")), .tab_id = p.target, .origins = self.origins.items, .timeout_ms = self.timeout_ms, .profile = self.browser.profile, .persistent_profile = self.browser.persistent_profile, .port = self.browser.client.port }),
+            .open => {
+                const url = J.str(try page.eval(try a.print("new URL({s}).href", .{try J.json(a, input.args[0])})));
+                if (!self.permitted(url)) return error.OriginNotAllowed;
+                p.allow_unload = true;
+                defer p.allow_unload = false;
+                try page.goto(url);
+                return .{ .string = J.str(try page.eval("location.href")) };
+            },
+            .reload => {
+                p.allow_unload = true;
+                defer p.allow_unload = false;
+                try page.reload();
+            },
+            .content => try page.content(input.args[0]),
+            .eval => {
+                diagnostics.phase = .action;
+                diagnostics.action = .possibly_dispatched;
+                const value = try page.eval(input.args[0]);
+                diagnostics.action = .completed;
+                return value;
+            },
+            .snapshot => return page.snapshot(input.limit),
+            .read => return page.read(input.locator, input.limit),
+            .text => return page.text(query),
+            .click => page.click(query) catch |err| {
+                if (!input.modern and (err == error.ElementDisabled or err == error.ElementCovered or err == error.ElementNotVisible)) return error.ElementNotActionable;
+                return err;
+            },
+            .fill => try page.fill(query, input.args[value_index]),
+            .select => try page.select(query, input.args[value_index]),
+            .press => try page.press(input.locator, input.args[0]),
+            .wait => if (input.locator == null) try page.waitExpression(input.args[0]) else try page.wait(query, input.state),
+            .upload => try page.upload(query, input.args[value_index]),
+            .download => {
+                const output = input.args[value_index];
+                const start = self.browser.downloads.items.len;
+                try page.click(query);
+                while (std.Io.Clock.awake.now(p.io).toMilliseconds() < page.deadline_ms) {
+                    _ = try page.eval("0");
+                    _ = try Agent.call(a, &self.browser.socket, "Browser.getVersion", .{});
+                    var guid: []const u8 = "";
+                    var filename: []const u8 = "";
+                    for (self.browser.downloads.items[start..]) |event| {
+                        const params = J.field(event, "params");
+                        if (std.mem.eql(u8, J.str(J.field(event, "method")), "Browser.downloadWillBegin")) {
+                            guid = J.str(J.field(params, "guid"));
+                            filename = J.str(J.field(params, "suggestedFilename"));
+                        }
+                        if (guid.len > 0 and std.mem.eql(u8, guid, J.str(J.field(params, "guid")))) {
+                            const state = J.str(J.field(params, "state"));
+                            if (std.mem.eql(u8, state, "canceled")) return error.DownloadCanceled;
+                            if (std.mem.eql(u8, state, "completed")) {
+                                const path = try a.print("{s}/{s}", .{ self.browser.downloads_dir, guid });
+                                const bytes = try std.Io.Dir.cwd().readFileAlloc(p.io, path, a, .limited(20 * 1024 * 1024));
+                                diagnostics.phase = .output;
+                                try Agent.writeFile(p.io, output, bytes);
+                                return J.val(a, .{ .filename = filename, .path = output, .bytes = bytes.len });
+                            }
+                        }
+                    }
+                    try p.io.sleep(.fromMilliseconds(25), .awake);
+                }
+                return error.DownloadTimeout;
+            },
+            .screenshot => {
+                const result = try page.screenshot(input.args[0], input.full_page);
+                return if (input.modern) result else .{ .string = input.args[0] };
+            },
+            else => unreachable,
+        }
+        return .{ .bool = true };
+    }
+
+    fn executeLegacy(self: *State, op: Op, args: []const []const u8) !V {
         if (op == .close) {
             self.closed = true;
             return .{ .string = "closing" };
@@ -301,6 +433,7 @@ const State = struct {
         const tabs = try self.refresh();
         const p = self.page;
         switch (op) {
+            .read, .snapshot, .select, .press => unreachable,
             .close => unreachable,
             .tabs => {
                 var result: std.ArrayList(V) = .empty;

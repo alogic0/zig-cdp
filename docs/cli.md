@@ -131,7 +131,49 @@ Chrome itself exits, start a new session.
 ## Commands
 
 Put `--session PATH` before the command. Quote CSS, HTML, and JavaScript so the
-shell passes each as one argument. All element commands use CSS selectors.
+shell passes each as one argument. Existing positional CSS commands remain valid.
+
+Element commands also accept one named locator: `--selector CSS`,
+`--role ROLE [--name EXACT_NAME]`, or `--text EXACT_TEXT`. Role/name matching
+uses Chrome's accessibility tree. Text matching normalizes whitespace and selects
+the deepest exact matches. Missing and ambiguous targets return distinct errors;
+the tool never silently chooses the first match.
+
+```sh
+"$cdp" --session "$session" snapshot --limit 20000
+"$cdp" --session "$session" read --limit 10000
+"$cdp" --session "$session" fill --role textbox --name Name --value Sample
+"$cdp" --session "$session" click --role button --name Save
+"$cdp" --session "$session" select --role combobox --name Choice --value b
+"$cdp" --session "$session" press --selector '#name' --key Control+a
+"$cdp" --session "$session" wait --selector '#result' --state visible --timeout 5000
+```
+
+`read` returns UTF-8 text, byte counts and an explicit `truncated` flag.
+`snapshot` returns accessibility nodes with IDs, roles, names, values, states,
+parent IDs and backend DOM IDs. Its byte budget covers serialized nodes; the
+small JSON envelope is additional. Both default to 20,000 bytes and accept
+`--limit` from 1 to 1,048,576. Snapshot node IDs are observations of the current
+document and must be refreshed after navigation. Neither locator type promises
+iframe or shadow-root traversal.
+
+`--tab ID` targets a page without changing the session's selection.
+`--timeout MS` overrides the operation budget without changing the session
+default. Locator waits accept `visible`, `hidden`, `attached`, or `detached`;
+hidden and detached waits succeed when no element matches.
+
+`fill` and `select` accept `--value-file PATH` or `--value-file -` to read stdin.
+`eval --script PATH|-` accepts a file or stdin as an alternative to inline code.
+Input files are limited to 1 MiB; trailing newlines are preserved. Use `--` before
+positional arguments that begin with two hyphens. `--out PATH` saves command JSON
+to a private file. Screenshots accept `--out PATH` and either `--viewport` or
+`--full-page`; a full-page capture uses the document's content dimensions and
+excludes browser scrollbars. Output parent directories must exist.
+
+Keyboard combinations accept Control/Ctrl, Alt, Meta and Shift, followed by an
+ASCII character or Enter, Tab, Escape, Backspace, Delete, ArrowLeft/Up/Right/Down,
+Home, End, PageUp, PageDown, or Space. Input and mouse actions use CDP browser
+input. Selecting an option dispatches DOM input/change events.
 
 | Command | Behavior |
 | --- | --- |
@@ -148,6 +190,10 @@ shell passes each as one argument. All element commands use CSS selectors.
 | `click CSS` | Scroll, check actionability, and send browser mouse input. |
 | `fill CSS TEXT` | Fill a form input using browser text input. |
 | `text CSS` | Read one element's `innerText`. |
+| `read [LOCATOR]` | Read bounded rendered text with truncation metadata. |
+| `snapshot` | Read a bounded Chrome accessibility tree. |
+| `select CSS VALUE` | Select one enabled native option. |
+| `press KEY` | Send a key or modifier combination, optionally to a locator. |
 | `wait JAVASCRIPT` | Wait for the expression to return boolean `true`. |
 | `timeout MILLISECONDS` | Set the timeout for session tabs, from 1 to 120000. |
 | `screenshot PATH` | Write a PNG. |
@@ -157,8 +203,8 @@ shell passes each as one argument. All element commands use CSS selectors.
 
 Headless pages use a fixed 1280 × 720 viewport. With `--headed`, the page follows
 the window's available content size and native display scale, including resizes.
-Use `eval` for DOM inspection and the library for additional CDP methods,
-role/name locators, multiple contexts, or structured
+Use `read` and `snapshot` for bounded inspection, `eval` for additional DOM
+queries, and the library for additional CDP methods, multiple contexts, or structured
 HTTP response observations. A successful `eval` may return `null` for values CDP
 cannot serialize by value; prefer plain JSON-compatible results. Application
 assertions belong in your script: evaluating `false` is successful evaluation,
@@ -184,6 +230,12 @@ Failures exit with status 1 and report an error name:
 ```json
 {"ok":false,"err":"ElementNotActionable"}
 ```
+
+Command errors also include an `error` object containing `code`, `phase`,
+`match_count`, and `action`. The action field is `not_started`,
+`possibly_dispatched`, or `completed`; it describes input dispatch, not an
+application assertion. Inspect the page before repeating a write after an
+uncertain result. Ordinary locator failures leave the session usable.
 
 Diagnostics from browser operations go to the owner's stderr. A rejected command,
 locator timeout, or JavaScript exception normally leaves the session usable.

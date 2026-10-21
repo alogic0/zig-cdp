@@ -1,6 +1,7 @@
 const std = @import("std");
 const session = @import("cli_session.zig");
 const J = @import("cdp").journey;
+const Agent = @import("cdp").agent;
 
 const help =
     \\Usage: zig-cdp --session PATH COMMAND [ARGS]
@@ -21,12 +22,23 @@ const help =
     \\click CSS                        Click one matching element
     \\fill CSS TEXT                    Fill one input
     \\text CSS                         Read one element's inner text
+    \\read [LOCATOR]                   Read bounded rendered text (default body)
+    \\snapshot                         Read bounded Chrome accessibility nodes
+    \\select CSS VALUE                 Select one enabled native option
+    \\press KEY                        Press a key or modifier combination
     \\wait JAVASCRIPT                  Wait until an expression returns true
     \\timeout MILLISECONDS             Set page wait timeout (1..120000)
     \\screenshot PATH                  Write a PNG
     \\upload CSS PATH                  Set one file input
     \\download CSS PATH                Click and save a completed download
     \\close                            Stop the owned browser and server
+    \\
+    \\LOCATOR: --selector CSS | --role ROLE [--name NAME] | --text TEXT
+    \\Element commands also accept LOCATOR instead of positional CSS.
+    \\Options: --tab ID, --timeout MS, --limit BYTES, --state STATE
+    \\         --value TEXT | --value-file PATH|- (fill/select)
+    \\         --script PATH|- (eval), --key KEY (press)
+    \\         --full-page | --viewport (screenshot), --out PATH
     \\
     \\PATH is a new session directory for serve, the same directory for clients.
     \\--user-data-dir uses an existing, unlocked profile and preserves it on close.
@@ -86,20 +98,94 @@ fn run(init: std.process.Init) !u8 {
         try session.serve(init.gpa, init.io, options);
         return 0;
     }
+    var input: session.Request = .{ .command = command };
     var args: std.ArrayList([]const u8) = .empty;
-    while (iterator.next()) |arg| try args.append(a, arg);
-    const op = try session.operation(command, args.items.len);
+    var output: ?[]const u8 = null;
+    var literal = false;
+    var value_supplied = false;
+    var screenshot_mode = false;
+    while (iterator.next()) |arg| {
+        if (!literal and std.mem.eql(u8, arg, "--")) {
+            literal = true;
+        } else if (!literal and std.mem.startsWith(u8, arg, "--")) {
+            input.modern = true;
+            if (std.mem.eql(u8, arg, "--full-page") or std.mem.eql(u8, arg, "--viewport")) {
+                if (screenshot_mode or !std.mem.eql(u8, command, "screenshot")) return error.InvalidOption;
+                screenshot_mode = true;
+                input.full_page = std.mem.eql(u8, arg, "--full-page");
+                continue;
+            }
+            const value = iterator.next() orelse return error.MissingOptionValue;
+            if (std.mem.eql(u8, arg, "--selector") or std.mem.eql(u8, arg, "--role") or std.mem.eql(u8, arg, "--name") or std.mem.eql(u8, arg, "--text")) {
+                if (input.locator == null) input.locator = .{};
+                const query = &input.locator.?;
+                const destination = if (std.mem.eql(u8, arg, "--selector")) &query.selector else if (std.mem.eql(u8, arg, "--role")) &query.role else if (std.mem.eql(u8, arg, "--name")) &query.name else &query.text;
+                if (destination.* != null) return error.InvalidLocator;
+                destination.* = value;
+            } else if (std.mem.eql(u8, arg, "--tab")) {
+                if (input.tab != null) return error.InvalidOption;
+                input.tab = value;
+            } else if (std.mem.eql(u8, arg, "--timeout")) {
+                if (input.timeout_ms != null) return error.InvalidOption;
+                input.timeout_ms = std.fmt.parseInt(u32, value, 10) catch return error.InvalidTimeout;
+            } else if (std.mem.eql(u8, arg, "--limit")) {
+                if (!std.mem.eql(u8, command, "read") and !std.mem.eql(u8, command, "snapshot")) return error.InvalidOption;
+                input.limit = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit;
+            } else if (std.mem.eql(u8, arg, "--state")) {
+                if (!std.mem.eql(u8, command, "wait")) return error.InvalidOption;
+                input.state = value;
+            } else if (std.mem.eql(u8, arg, "--out")) {
+                if (output != null) return error.InvalidOption;
+                output = try absolute(a, init.io, value);
+            } else if (std.mem.eql(u8, arg, "--value") or std.mem.eql(u8, arg, "--value-file")) {
+                if (value_supplied or (!std.mem.eql(u8, command, "fill") and !std.mem.eql(u8, command, "select"))) return error.InvalidOption;
+                value_supplied = true;
+                try args.append(a, if (std.mem.eql(u8, arg, "--value-file")) try readInput(a, init.io, value) else value);
+            } else if (std.mem.eql(u8, arg, "--script")) {
+                if (!std.mem.eql(u8, command, "eval") or value_supplied) return error.InvalidOption;
+                value_supplied = true;
+                try args.append(a, try readInput(a, init.io, value));
+            } else if (std.mem.eql(u8, arg, "--key")) {
+                if (!std.mem.eql(u8, command, "press")) return error.InvalidOption;
+                try args.append(a, value);
+            } else return error.UnknownOption;
+        } else try args.append(a, arg);
+    }
+    if (std.mem.eql(u8, command, "screenshot") and output != null) {
+        try args.append(a, output.?);
+        output = null;
+    }
+    input.args = args.items;
+    const op = try session.operation(input);
     switch (op) {
         .screenshot => args.items[0] = try absolute(a, init.io, args.items[0]),
-        .upload, .download => args.items[1] = try absolute(a, init.io, args.items[1]),
+        .upload, .download => {
+            const index: usize = if (input.locator == null) 1 else 0;
+            args.items[index] = try absolute(a, init.io, args.items[index]);
+        },
         else => {},
     }
-    const reply = try session.request(a, init.io, path, .{ .command = command, .args = args.items });
-    try std.Io.File.stdout().writeStreamingAll(init.io, reply);
-    try std.Io.File.stdout().writeStreamingAll(init.io, "\n");
+    const reply = try session.request(a, init.io, path, input);
     const parsed = try std.json.parseFromSlice(std.json.Value, a, reply, .{});
     defer parsed.deinit();
+    if (output) |destination| if (J.boolean(J.field(parsed.value, "ok"))) {
+        try Agent.writeFile(init.io, destination, reply);
+        try std.Io.File.stdout().writeStreamingAll(init.io, try J.json(a, .{ .ok = true, .file = destination }));
+        try std.Io.File.stdout().writeStreamingAll(init.io, "\n");
+        return 0;
+    };
+    try std.Io.File.stdout().writeStreamingAll(init.io, reply);
+    try std.Io.File.stdout().writeStreamingAll(init.io, "\n");
     return if (J.boolean(J.field(parsed.value, "ok"))) 0 else 1;
+}
+
+fn readInput(a: std.mem.Allocator, io: std.Io, path: []const u8) ![]const u8 {
+    if (std.mem.eql(u8, path, "-")) {
+        var buffer: [4096]u8 = undefined;
+        var reader = std.Io.File.stdin().reader(io, &buffer);
+        return reader.interface.allocRemaining(a, .limited(1024 * 1024));
+    }
+    return std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024));
 }
 
 fn absolute(a: std.mem.Allocator, io: std.Io, path: []const u8) ![]const u8 {

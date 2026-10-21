@@ -6,6 +6,7 @@ from pathlib import Path
 import select
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -192,6 +193,91 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def exercise_agent_commands(server, root):
+    def invoke(*args, ok=True, stdin=None):
+        result = subprocess.run(
+            [EXE, "--session", str(server.path), *args],
+            input=stdin, capture_output=True, text=True, timeout=20,
+        )
+        reply = json.loads(result.stdout)
+        assert reply["ok"] is ok, (args, reply, result.stderr)
+        assert (result.returncode == 0) is ok
+        return reply
+
+    invoke("content", """<!doctype html><title>Agent fixture</title>
+      <label>Name<input id="name"></label><textarea aria-label="Notes"></textarea>
+      <div contenteditable role="textbox" aria-label="Editor"></div>
+      <input type="range" aria-label="Volume">
+      <button id="save">Save</button><output id="result"></output>
+      <select aria-label="Choice"><option value="a">Alpha</option><option value="b">Beta</option>
+      <optgroup disabled><option value="bad">Disabled option</option></optgroup></select>
+      <button disabled>Disabled</button><button>Duplicate</button><button>Duplicate</button>
+      <input type="file" id="file" hidden><button id="export">Export</button>
+      <span id="hidden" hidden>Hidden</span>
+      <div style="position:relative;width:100px;height:40px"><button id="covered">Covered</button>
+      <div style="position:absolute;inset:0;background:white"></div></div>
+      <script>window.trusted=[];document.addEventListener('input',e=>trusted.push(e.isTrusted));
+      document.querySelector('#save').onclick=()=>document.querySelector('#result').textContent=document.querySelector('#name').value;
+      document.querySelector('#export').onclick=()=>{let a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['agent-download']));a.download='agent.txt';a.click();};</script>""")
+    nodes = invoke("snapshot")["result"]["nodes"]
+    assert any(n["role"] == "slider" and n["name"] == "Volume" for n in nodes), nodes
+    assert any(n["role"] == "textbox" and n["name"] == "Name" for n in nodes)
+    clipped = invoke("snapshot", "--limit", "40")["result"]
+    assert clipped["truncated"] and clipped["returned_bytes"] <= 40
+    invoke("fill", "--role", "textbox", "--name", "Name", "--value", "Sample 🧭")
+    invoke("click", "--role", "button", "--name", "Save")
+    assert invoke("text", "--selector", "#result")["result"] == "Sample 🧭"
+    invoke("click", "--role", "slider", "--name", "Volume")
+    assert invoke("eval", "trusted.every(Boolean)")["result"] is True
+    secret = "private fixture text\ntrailing newline\n"
+    filled = invoke("fill", "--role", "textbox", "--name", "Notes", "--value-file", "-", stdin=secret)
+    assert secret not in json.dumps(filled)
+    assert invoke("eval", "document.querySelector('textarea').value")["result"] == secret
+    value_file = root / "value.txt"
+    value_file.write_text("from-file")
+    invoke("fill", "--role", "textbox", "--name", "Editor", "--value-file", str(value_file))
+    assert invoke("text", "--role", "textbox", "--name", "Editor")["result"] == "from-file"
+    invoke("press", "--role", "textbox", "--name", "Editor", "--key", "Control+a")
+    invoke("press", "--key", "Backspace")
+    assert invoke("eval", "document.querySelector('[contenteditable]').textContent")["result"] == ""
+    invoke("select", "--role", "combobox", "--name", "Choice", "--value", "b")
+    assert invoke("eval", "document.querySelector('select').value")["result"] == "b"
+    assert invoke("select", "--selector", "select", "--value", "bad", ok=False)["err"] == "InvalidSelectOption"
+    duplicate = invoke("click", "--role", "button", "--name", "Duplicate", ok=False)
+    assert duplicate["err"] == "AmbiguousLocator"
+    assert duplicate["error"]["match_count"] == 2 and duplicate["error"]["action"] == "not_started"
+    assert invoke("click", "--role", "button", "--name", "Missing", "--timeout", "100", ok=False)["err"] == "ElementNotFound"
+    assert invoke("click", "--role", "button", "--name", "Disabled", "--timeout", "100", ok=False)["err"] == "ElementDisabled"
+    assert invoke("click", "--selector", "#covered", "--timeout", "100", ok=False)["err"] == "ElementCovered"
+    invoke("wait", "--selector", "#hidden", "--state", "hidden")
+    invoke("wait", "--selector", "#missing", "--state", "detached")
+    invoke("wait", "--selector", "#name", "--state", "visible")
+    invoke("wait", "--selector", "#hidden", "--state", "attached")
+    script = root / "inspect.js"
+    script.write_text("({answer: 42})")
+    assert invoke("eval", "--script", str(script))["result"] == {"answer": 42}
+    assert invoke("eval", "--script", "-", stdin="6 * 7")["result"] == 42
+    result_file = root / "read.json"
+    invoke("read", "--limit", "17", "--out", str(result_file))
+    saved = json.loads(result_file.read_text())
+    assert saved["result"]["truncated"] and saved["result"]["returned_bytes"] <= 17
+    assert result_file.stat().st_mode & 0o777 == 0o600
+    invoke("upload", "--selector", "#file", str(value_file))
+    assert invoke("eval", "document.querySelector('#file').files[0].text()")["result"] == "from-file"
+    destination = root / "agent.txt"
+    invoke("download", "--role", "button", "--name", "Export", str(destination))
+    assert destination.read_text() == "agent-download"
+    invoke("content", '<div style="height:3000px">Tall page 🧭</div>')
+    document = invoke("eval", "({w:document.documentElement.scrollWidth,h:document.documentElement.scrollHeight})")["result"]
+    invoke("screenshot", "--out", str(root / "viewport.png"), "--viewport")
+    invoke("screenshot", "--out", str(root / "full.png"), "--full-page")
+    viewport = struct.unpack("!II", (root / "viewport.png").read_bytes()[16:24])
+    full = struct.unpack("!II", (root / "full.png").read_bytes()[16:24])
+    assert viewport == (1280, 720), viewport
+    assert full == (document["w"], document["h"]) and full[1] >= 3000, full
+    print("Agent inspection, semantic actions, stdin/files, errors and screenshot bounds: passed", flush=True)
+
+
 def main():
     help_result = subprocess.run([EXE, "--help"], capture_output=True, text=True, check=True)
     assert "--session" in help_result.stdout
@@ -255,7 +341,7 @@ def main():
             assert command(session_path, "wait", "false", ok=False) == "BrowserConditionTimeout"
             assert command(session_path, "eval", "throw new Error('expected')", ok=False) == "BrowserEvaluationFailed"
             assert command(session_path, "eval", "6*7") == 42
-            assert command(session_path, "eval", "'x'.repeat(17*1024*1024)", ok=False) == "ResponseTooLarge"
+            assert command(session_path, "eval", "'x'.repeat(17*1024*1024)", "--timeout", "5000", ok=False) == "ResponseTooLarge"
             assert command(session_path, "eval", "true") is True
             command(session_path, "timeout", "30000")
 
@@ -282,6 +368,11 @@ def main():
             command(peer.path, "close")
             peer.done()
         print("CLI commands, framing, shared state, isolation, files, errors, and close: passed", flush=True)
+
+        with Session(root / "agent") as server:
+            exercise_agent_commands(server, root)
+            command(server.path, "close")
+            server.done()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             with Session(root / f"signal-{sig}") as server:

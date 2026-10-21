@@ -38,6 +38,17 @@ requested optimization.
 
 ## Launch and cleanup
 
+For request-scoped agent operations on an existing page socket, use
+`cdp.agent.Page.init(allocator, io, &page.socket, timeout_ms, &diagnostics)`.
+It provides bounded text/accessibility inspection, Chrome role/name locators,
+strict CSS/text actions, keyboard input, select/upload and screenshot operations.
+Call its `deinit` before releasing the request allocator to release temporary
+remote objects. Returned JSON values borrow from that allocator. The socket is
+borrowed and must be used by only one task at a time; this layer never owns the
+browser process or changes its viewport, interception, or download policy.
+
+The journey API below retains its existing browser ownership contract.
+
 ```zig
 const std = @import("std");
 const J = @import("cdp").journey;

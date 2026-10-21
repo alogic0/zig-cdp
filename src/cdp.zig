@@ -3,6 +3,7 @@
 //! JSON-RPC evaluation, and headless process lifecycle.
 const std = @import("std");
 pub const journey = @import("cdp_journey.zig");
+pub const agent = @import("cdp_agent.zig");
 
 pub const Target = struct {
     id: []const u8,
@@ -30,6 +31,8 @@ pub const WsSession = struct {
     pending_bytes: usize = 0,
     event_context: ?*anyopaque = null,
     event_handler: ?*const fn (*anyopaque, *WsSession, []const u8) anyerror!void = null,
+    /// Absolute awake-clock budget shared by all frames of one operation.
+    deadline_ms: ?i64 = null,
     pub const max_message_bytes = 64 * 1024 * 1024;
 
     pub fn close(self: *WsSession) void {
@@ -77,11 +80,13 @@ pub const WsSession = struct {
     fn readExact(self: *WsSession, bytes: []u8) !void {
         var offset: usize = 0;
         while (offset < bytes.len) {
+            const remaining = if (self.deadline_ms) |end| end - @as(i64, @intCast(std.Io.Clock.awake.now(self.io).toMilliseconds())) else 30_000;
+            if (remaining <= 0) return error.Timeout;
             var buffers = [_][]u8{bytes[offset..]};
             const result = try self.io.operateTimeout(.{ .net_read = .{
                 .socket_handle = self.stream.socket.handle,
                 .data = &buffers,
-            } }, .{ .duration = .{ .raw = .fromSeconds(30), .clock = .awake } });
+            } }, .{ .duration = .{ .raw = .fromMilliseconds(@min(remaining, 30_000)), .clock = .awake } });
             const n = (try result.net_read).data_len;
             if (n == 0) return error.ConnectionClosed;
             offset += n;

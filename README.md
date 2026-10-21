@@ -114,18 +114,19 @@ the document; use `open` when working with an actual application.
 "$cdp_bin" --session "$cdp_session" eval 'document.querySelector("#save").onclick=()=>document.querySelector("#result").textContent=document.querySelector("#name").value; true'
 ```
 
-Inspect the DOM to discover selectors before acting. Return JSON-compatible
-data, keep inspection bounded, and query additional attributes when needed:
+Inspect the page before acting. The built-in commands return bounded text and
+Chrome accessibility roles, names, states and node IDs:
 
 ```sh
-"$cdp_bin" --session "$cdp_session" eval 'Array.from(document.querySelectorAll("button,input,select,textarea,a")).filter(e=>e.getClientRects().length && getComputedStyle(e).visibility!=="hidden").slice(0,80).map(e=>({tag:e.tagName,id:e.id,testId:e.getAttribute("data-testid"),text:(e.innerText||e.getAttribute("aria-label")||"").trim().slice(0,120),type:e.getAttribute("type"),disabled:e.matches(":disabled")}))'
+"$cdp_bin" --session "$cdp_session" snapshot --limit 20000
+"$cdp_bin" --session "$cdp_session" read --limit 10000
 ```
 
-The CLI's element commands accept **CSS selectors**. Selectors should resolve to
-one intended element; use observed IDs, test attributes, or scoped selectors.
-There is no CLI accessibility-tree snapshot command. If you need visual context,
-save a screenshot and open the returned local PNG path with your image-viewing
-tool; the command's JSON reply does not itself display an image.
+Element commands accept CSS selectors, Chrome role/name locators, or exact
+normalized text. For example, `click --role button --name Save` acts on exactly
+one matching button. Missing and ambiguous matches fail explicitly. If you need
+visual context, save a screenshot and open the returned local PNG path with your
+image-viewing tool; the command's JSON reply does not itself display an image.
 
 Using the IDs observed in the fixture:
 

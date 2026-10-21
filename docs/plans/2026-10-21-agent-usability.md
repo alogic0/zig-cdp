@@ -2,7 +2,7 @@
 
 Date: 2026-10-21
 
-Status: proposed
+Status: implementation in progress
 
 The goal should be: **an agent can inspect a page, identify a control, act, and
 verify the result using short commands, with clear browser ownership.**

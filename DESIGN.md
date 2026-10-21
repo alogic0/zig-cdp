@@ -91,6 +91,25 @@ The library exposes context-scoped `tabs`, `newTab`, and `attachTab`, plus targe
 closure and connection-only `Page.detach`. Only a Page created by `Browser.page`
 owns its isolated context. Borrowed sibling/attached pages never dispose it.
 
+## Agent command layer
+
+The public `agent.Page` borrows a page WebSocket and uses a request allocator.
+It does not launch or stop a browser, install interceptors, change metrics, or
+configure downloads. It obtains role/name matches from Chrome's accessibility
+tree. CSS and exact normalized text are alternative strict locators. Temporary
+remote objects belong to a unique command group released on completion.
+
+CLI requests retain their command/argument fields and add optional typed
+locators, tab IDs, output bounds and per-command budgets. Existing positional
+commands remain accepted. Errors retain `err` and add structured phase,
+match-count and action-progress details. Progress describes dispatch, not
+application-level success; consumers verify the effect of an action.
+
+All frames in an operation share an absolute read deadline. Locator polling
+allows at most 100 ms for the last in-flight RPC to finish before abandoning
+the connection; remote-object cleanup has a separate 200 ms allowance. A
+transport failure seals the connection, while ordinary locator errors do not.
+
 ## Delivery and verification
 
 First establish the standalone library with its existing real-browser fixtures,

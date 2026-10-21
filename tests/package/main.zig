@@ -1,5 +1,6 @@
 const std = @import("std");
 const J = @import("cdp").journey;
+const Agent = @import("cdp").agent;
 
 test "independent consumer launches and evaluates" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -9,4 +10,12 @@ test "independent consumer launches and evaluates" {
     const page = try browser.page(&.{});
     defer page.close();
     try std.testing.expectEqual(@as(i64, 3), J.number(try page.eval("1 + 2")));
+    _ = try page.eval("document.body.innerHTML='<button>Package action</button>'; true");
+    var diagnostics: Agent.Diagnostics = .{};
+    var command = try Agent.Page.init(arena.allocator(), std.testing.io, &page.socket, 5000, &diagnostics);
+    defer command.deinit();
+    const snapshot = try command.snapshot(20_000);
+    try std.testing.expect(J.number(J.field(snapshot, "returned_nodes")) > 0);
+    try command.click(.{ .role = "button", .name = "Package action" });
+    try std.testing.expectEqual(.completed, diagnostics.action);
 }

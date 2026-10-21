@@ -1,5 +1,25 @@
 # Current delivery
 
+## Agent inspection and interactions, October 21, 2026
+
+Implemented the first two stages of the agent-usability plan: bounded UTF-8
+text and Chrome accessibility snapshots; strict CSS, exact text and actual
+Chrome role/name locators; select, keyboard and locator-state waits; file/stdin
+values and scripts; explicit viewport/full-page screenshots. Positional commands
+remain supported. Errors add phase, match-count and input-dispatch details.
+
+The public agent.Page command layer borrows a socket and releases its temporary
+remote objects. Command frame reads share a deadline, with bounded allowances
+for the final polling RPC and remote-object cleanup. Cancellation still joins
+and cleans owned browser sessions.
+
+Debug and ReleaseSafe pass the full CLI suite, including new real-browser
+semantic actions, disabled/covered/ambiguous controls, contenteditable and
+trusted input, hidden uploads, downloads, Unicode and output bounds. Both modes
+also pass 9/9 existing library tests and the independent consumer, which now
+uses the public agent API. Existing-profile and signal-cleanup checks pass.
+Existing-browser attachment and longer-session resource work follow next.
+
 ## Publication preparation, October 21, 2026
 
 Version 0.1.0 now carries an MIT license credited to zig-cdp developers.
