@@ -42,7 +42,6 @@ jobs:
         run: |
           test "$(zig version)" = "$(cat .zigversion)"
           google-chrome --version
-          python3 --version
 
       - name: Install virtual display dependencies
         run: |

@@ -3,14 +3,15 @@
 The [requirements](2026-10-21-native-cli-test-requirements.md) authorize the complete
 port of `tests/cli.py`, preserving subprocess acceptance and existing thresholds.
 Starting source: `4f50732127c333cf36f95ad98b5289c50c5f3a7c`, Zig 0.17.0.
-The requirements file existed untracked before this task; its text is preserved.
+The requirements file existed untracked before this task; its original proposal
+is preserved in foundation commit `bd5d3d3`.
 No public CDP API or production behavior change is selected.
 
 ## Finite scenario map
 
 Original Python line ranges refer to the starting revision. Each native group
-retains its assertions; Python remains available until both implementations pass
-against the same CLI artifacts in Debug and ReleaseSafe.
+retains its assertions; Python was kept available until both implementations
+passed against the same CLI artifacts in Debug and ReleaseSafe.
 
 | Group | Original coverage | Native destination | Status |
 | --- | --- | --- | --- |
@@ -69,6 +70,37 @@ folder; the HTTP PUT helper now sends the empty body required by std.http.
 The initial panic's two owned sessions were explicitly stopped and their private
 workspace removed. Later failure paths unwind their owned sessions normally.
 
-Parity is established. The next slice switches `test-cli`, removes Python and
-runs the existing library/example/package/headed regression gates. Until that
-slice, `test-cli-native` is the native path and `test-cli` retains Python.
+## Final build switch and regression gates
+
+`test-cli` now compiles and runs the native runner, passes the built CLI artifact,
+and forwards optional `--case NAME` arguments. Unknown groups fail instead of
+silently succeeding. Runner, fixture and support modules use the selected mode;
+`has_side_effects` forces execution against real browser state. The incremental
+`test-cli-native` name and Python runner are removed. CI retains its existing
+Debug/ReleaseSafe matrix, library, example, package and headed steps and drops
+the interpreter check. README and CLI guidance describe the native commands.
+
+The combined `test-cli test check example install test-headed` command passes
+16/16 steps in each profile (`final-debug.log`, `final-safe.log`). The final full
+native runs also pass all six groups with compilation cached, proving execution
+is not skipped (`final-native-debug.log`, `final-native-safe.log`). Their resource
+measurements are Debug 8,511,488→8,605,696 bytes and Safe 3,100,672→3,497,984 bytes,
+with seven descriptors throughout. This bounds the session owner over the finite
+workload, not Chrome memory or indefinite operation.
+
+An exported source tree with no sibling provider checkouts and an initially empty
+private global cache passes the independent package consumer 1/1 and library
+10/10 in both modes (`package-debug2.log`, `package-safe.log`, `library-debug.log`,
+`library-safe.log`). The export includes vendor archives and fixture HTML and
+excludes Git metadata, caches and generated dependencies. The tested source
+archive is retained as `tested-package-source.tar.gz`; temporary source/cache
+directories were removed after checks. Library warnings are expected negative
+fixture diagnostics; all ten tests pass.
+
+Final diagnostic refinements copy the last operation into a bounded buffer,
+independent of request arenas, and report capture outcome, exit/cleanup state
+and bounded stdout/stderr. Fixture observations and raw requests retain finite
+deadlines. Follow-up discovery checks exercise the error envelopes in both modes.
+Formatting, relative Markdown link targets, and `git diff --check` pass. An audit
+of active build, test and CI sources finds no Python invocation; production
+source files are byte-for-byte unchanged from the starting revision.

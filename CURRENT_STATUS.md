@@ -1,16 +1,37 @@
 # Current delivery
 
-## Native CLI acceptance migration, October 21, 2026
+## Native CLI acceptance migration completed, October 21, 2026
 
-The [native test migration](docs/plans/2026-10-21-native-cli-migration.md) now
-passes all six native scenario groups in Debug and ReleaseSafe against the same
-CLI bytes as the passing Python reference suites. The complete scenario map,
-provider pins, ownership boundaries and resource measurements are recorded there.
-The original 720-command/36-tab workload and all limits are preserved.
-Production CDP behavior and its public dependency graph remain unchanged.
+`zig build test-cli` now runs the native Zig subprocess suite. The Python runner
+and CI interpreter check are removed. All prior scenarios are mapped in the
+[migration record](docs/plans/2026-10-21-native-cli-migration.md); Python/native
+parity was established against identical Debug and ReleaseSafe CLI artifacts
+before removal. Production sources and public CDP imports are unchanged.
 
-Next: switch `test-cli` and CI to the native runner, remove the Python suite,
-and complete library, example, isolated package and headed regression gates.
+Test-only dependencies pin HTTP 0.2.1 and test-support 0.1.0 as immutable bundled
+archives, sharing the existing process 0.5.1 identity. Fixtures retain independent
+browser ownership, private workspaces, dynamic ports, bounded commands and joined
+HTTP handlers. CLI failures retain bounded scenario/command diagnostics.
+
+Verification with Zig 0.17.0 and Chrome 155.0.8059.84:
+
+| Check | Debug | ReleaseSafe |
+| --- | --- | --- |
+| Complete native CLI suite | 6/6 groups passed | 6/6 groups passed |
+| Library tests, fresh isolated cache | 10/10 passed | 10/10 passed |
+| Independent exported package consumer | 1/1 passed | 1/1 passed |
+| Headed Xvfb regression | 1/1 passed | 1/1 passed |
+| Example, CLI installation and standard combined command | 16/16 build steps passed | 16/16 build steps passed |
+| Resource owner RSS bytes | 8,511,488 → 8,605,696 | 3,100,672 → 3,497,984 |
+| Resource owner descriptors | 7 → 7 | 7 → 7 |
+
+The workload remains 24 warmup commands, 720 inspection/evaluation commands and
+36 tab cycles, with RSS growth below 32 MiB and descriptors at most baseline+3.
+Both streaming failures cancel transfer, clear staging and preserve recovery.
+Browser/profile ownership, saved state and unrelated tabs survive the required
+error and signal cases. Format, relative documentation targets and diff checks
+pass. The active build/test sources invoke no Python. Native acceptance always
+executes even when its compiler artifacts are cached.
 
 ## Agent usability plan completed, October 21, 2026
 

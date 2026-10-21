@@ -240,8 +240,13 @@ zig build test-headed --summary all
 zig build test-headed -Doptimize=ReleaseSafe --summary all
 ```
 
-The CLI acceptance tests use Python 3's standard library. The library and CLI
-have no Python runtime dependency. `test-headed` requires `xvfb-run` and tests
+The CLI acceptance runner is native Zig and invokes the built CLI as separate
+processes. Building, using and testing require no Python interpreter. It uses
+pinned shared HTTP fixtures and test-support packages and always executes its
+browser scenarios, even when compilation is cached. To run one group, use
+`zig build test-cli -- --case resources`; the groups are `contract`, `agent`,
+`lifecycle`, `discovery`, `endpoint`, and `resources`.
+`test-headed` requires `xvfb-run` and tests
 window resizing on a separate virtual X display. The independent package check
 runs with `zig build test` from `tests/package` in either optimization profile.
 

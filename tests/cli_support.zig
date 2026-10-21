@@ -10,6 +10,16 @@ pub const str = S.json.str;
 pub const arr = S.json.arr;
 pub const is = S.json.is;
 pub const eql = std.mem.eql;
+/// Copy the last operation so diagnostics survive short-lived request arenas.
+pub const Trace = struct {
+    buffer: [2048]u8 = undefined,
+    len: usize = 0,
+    pub fn record(self: *Trace, comptime fmt: []const u8, args: anytype) void {
+        var writer: Io.Writer = .fixed(&self.buffer);
+        writer.print(fmt, args) catch {};
+        self.len = writer.buffered().len;
+    }
+};
 pub fn check(ok: bool, message: []const u8) !void {
     if (!ok) {
         std.debug.print("ASSERT: {s}\n", .{message});
@@ -56,6 +66,7 @@ pub const Context = struct {
     exe: []const u8,
     root: []const u8,
     scenario: []const u8,
+    trace: ?*Trace = null,
     pub fn path(c: Context, name: []const u8) ![]const u8 {
         return std.fs.path.join(c.a, &.{ c.root, name });
     }
@@ -92,6 +103,7 @@ pub const Context = struct {
     }
     pub const Invoke = struct { ok: bool = true, stdin: ?[]const u8 = null, cwd: ?[]const u8 = null, timeout_ms: u32 = 20000 };
     pub fn invoke(c: Context, args: []const []const u8, options: Invoke) !V {
+        if (c.trace) |trace| trace.record("argv={any}", .{args});
         const argv = try std.mem.concat(c.a, []const u8, &.{ &.{c.exe}, args });
         const report = try S.command.runReport(std.heap.page_allocator, c.io, .{ .run = .{
             .spawn = .{ .argv = argv, .cwd = if (options.cwd) |cwd| .{ .path = cwd } else .inherit },
@@ -101,7 +113,8 @@ pub const Context = struct {
             .exit_policy = .drain_output,
         }, .stdin = options.stdin });
         defer report.deinit(std.heap.page_allocator);
-        errdefer std.debug.print("SCENARIO {s}; argv={any}; stdout={s}; stderr={s}\n", .{ c.scenario, argv, report.stdout[0..@min(report.stdout.len, 4096)], report.stderr[0..@min(report.stderr.len, 4096)] });
+        errdefer std.debug.print("capture outcome={s}; cleanup={any}; term={any}\n", .{ @tagName(report.outcome), report.cleanup_failure, report.term });
+        errdefer std.debug.print("SCENARIO {s}; stdout={s}; stderr={s}\n", .{ c.scenario, report.stdout[0..@min(report.stdout.len, 4096)], report.stderr[0..@min(report.stderr.len, 4096)] });
         try check(report.outcome == .completed and report.cleanup_failure == null and report.term != null, "command completed with bounded capture and clean ownership");
         const value = try c.parse(report.stdout);
         try equal(try field(value, "ok"), options.ok);
@@ -117,6 +130,7 @@ pub const Context = struct {
         try equal(try field(value, "err"), code);
     }
     pub fn raw(c: Context, session: []const u8, payload: []const u8) !V {
+        if (c.trace) |trace| trace.record("raw request: {s}", .{payload});
         // The timeout covers connect, write and read, including oversized input.
         const Result = union(enum) { reply: anyerror!V, timeout: Io.Cancelable!void };
         var storage: [2]Result = undefined;
@@ -181,6 +195,7 @@ pub const Session = struct {
     log_path: []const u8,
     ready: V,
     pub fn start(c: Context, name: []const u8, args: []const []const u8) !Session {
+        if (c.trace) |trace| trace.record("serve {s}: {any}", .{ name, args });
         const path_name = try c.path(name);
         const log_path = try c.path(try c.a.print("{s}.stderr", .{name}));
         const log = try Io.Dir.cwd().createFile(c.io, log_path, .{ .read = true });
@@ -271,6 +286,7 @@ pub const Pending = struct {
     out_path: []const u8,
     err_path: []const u8,
     pub fn start(c: Context, name: []const u8, args: []const []const u8) !Pending {
+        if (c.trace) |trace| trace.record("pending {s}: {any}", .{ name, args });
         const out_path = try c.path(try c.a.print("{s}.stdout", .{name}));
         const err_path = try c.path(try c.a.print("{s}.stderr", .{name}));
         const out = try Io.Dir.cwd().createFile(c.io, out_path, .{ .read = true });

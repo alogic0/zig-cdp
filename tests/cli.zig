@@ -34,8 +34,9 @@ pub fn main(init: std.process.Init) !void {
         defer workspace.close(.failure) catch |err| std.debug.print("Workspace cleanup: {s}\n", .{@errorName(err)});
         var arena = std.heap.ArenaAllocator.init(init.gpa);
         defer arena.deinit();
-        const c: H.Context = .{ .a = arena.allocator(), .io = init.io, .exe = exe, .root = workspace.path, .scenario = case.name };
-        errdefer std.debug.print("FAIL scenario={s}\n", .{case.name});
+        var trace: H.Trace = .{};
+        const c: H.Context = .{ .a = arena.allocator(), .io = init.io, .exe = exe, .root = workspace.path, .scenario = case.name, .trace = &trace };
+        errdefer std.debug.print("FAIL scenario={s}; last operation={s}\n", .{ case.name, trace.buffer[0..trace.len] });
         try case.run(c);
         try workspace.close(.success);
         completed += 1;

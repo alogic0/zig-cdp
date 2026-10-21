@@ -2,9 +2,9 @@
 
 Date: 2026-10-21
 
-Status: proposed
+Status: completed — see the [scenario map and verification](2026-10-21-native-cli-migration.md)
 
-Replace [tests/cli.py](../../tests/cli.py) with a native Zig runner while
+Replace the original `tests/cli.py` with a [native Zig runner](../../tests/cli.zig) while
 preserving its coverage. After migration, building, using and testing zig-cdp
 must require no Python interpreter.
 

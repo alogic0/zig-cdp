@@ -324,3 +324,17 @@ alive. Page changes and explicitly created/closed tabs remain as requested.
 Timeout after dispatch can leave an action in progress: inspect before retrying.
 A command requiring a promise that never settles can seal its own connection;
 the next endpoint command establishes a fresh connection.
+
+## Acceptance checks
+
+Run `zig build test-cli` or `zig build test-cli -Doptimize=ReleaseSafe` for the
+native subprocess suite. Chrome is required; Python is not. The suite covers
+owned sessions and external attachment, actions and output files, tabs and saved
+profiles, malformed requests, discovery faults, signals and timeout recovery.
+It retains the 720-command/36-tab resource workload and verifies canceled
+downloads stop receiving data and remove staging. Tests use fresh private
+profiles and ephemeral loopback ports. `zig build test-headed` separately checks
+native window sizing under Xvfb.
+
+See the [scenario map](plans/2026-10-21-native-cli-migration.md) for the preserved
+reference coverage and parity evidence.
