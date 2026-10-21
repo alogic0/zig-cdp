@@ -27,6 +27,8 @@ available. The window manager is terminated and joined after the test.
 The headed fixture also renders actual responsive content, requires document
 focus and brings the page forward after each native resize; it does not measure
 an idle blank document. Its existing geometry assertions remain intact.
+The Xvfb fixture uses software rendering and retains a bounded Chrome stderr
+excerpt on failure. Hosted GPU/compositor behavior is outside this geometry gate.
 
 A later hosted external-browser fixture observed an empty DevToolsActivePort
 file between creation and its record write. The fixture now polls for a valid

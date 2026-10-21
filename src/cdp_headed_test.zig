@@ -4,7 +4,30 @@ const J = @import("cdp").journey;
 test "headed tabs share their context window and follow resizing" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const browser = try J.Browser.startWithOptions(arena.allocator(), std.testing.io, .{ .headless = false });
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var random: [12]u8 = undefined;
+    io.random(&random);
+    const workspace = try a.print("/tmp/cdp-headed-fixture-{s}", .{std.fmt.bytesToHex(random, .lower)});
+    try std.Io.Dir.cwd().createDir(io, workspace, .fromMode(0o700));
+    defer std.Io.Dir.cwd().deleteTree(io, workspace) catch |err| std.debug.print("Headed fixture cleanup: {s}\n", .{@errorName(err)});
+    const launcher = try a.print("{s}/browser", .{workspace});
+    const log_path = try a.print("{s}/chrome.stderr", .{workspace});
+    const executable = @import("cdp").findBrowserExecutable(io) orelse return error.NoBrowserFound;
+    const script = try a.print("#!/bin/sh\nexec '{s}' --disable-gpu \"$@\" 2>'{s}'\n", .{ executable, log_path });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = launcher, .data = script, .flags = .{ .permissions = .fromMode(0o700) } });
+    errdefer {
+        if (std.Io.Dir.cwd().openFile(io, log_path, .{})) |file| {
+            defer file.close(io);
+            var buffer: [1024]u8 = undefined;
+            var reader = file.readerStreaming(io, &buffer);
+            var excerpt: [8192]u8 = undefined;
+            const count = reader.interface.readSliceShort(&excerpt) catch 0;
+            std.debug.print("Headed Chrome stderr: {s}\n", .{excerpt[0..count]});
+        } else |_| {}
+    }
+    // Use software rendering for the Xvfb geometry fixture.
+    const browser = try J.Browser.startWithOptions(a, io, .{ .headless = false, .executable = launcher });
     defer browser.stop();
     const normal = try browser.profilePage(&.{});
     defer normal.close();
