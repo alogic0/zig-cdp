@@ -2,12 +2,15 @@
 
 ## Native CLI acceptance migration, October 21, 2026
 
-The [native test migration](docs/plans/2026-10-21-native-cli-migration.md) is active.
-Pinned independent HTTP/test-support packages are wired as test dependencies.
-The initial subprocess/session slice passes Debug and ReleaseSafe.
-The original Python suite passes both profiles and remains the `test-cli` path
-until the complete mapped native suite demonstrates parity. Production CDP
-behavior and its public dependency graph remain unchanged.
+The [native test migration](docs/plans/2026-10-21-native-cli-migration.md) now
+passes all six native scenario groups in Debug and ReleaseSafe against the same
+CLI bytes as the passing Python reference suites. The complete scenario map,
+provider pins, ownership boundaries and resource measurements are recorded there.
+The original 720-command/36-tab workload and all limits are preserved.
+Production CDP behavior and its public dependency graph remain unchanged.
+
+Next: switch `test-cli` and CI to the native runner, remove the Python suite,
+and complete library, example, isolated package and headed regression gates.
 
 ## Agent usability plan completed, October 21, 2026
 

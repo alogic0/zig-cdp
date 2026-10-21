@@ -156,7 +156,7 @@ pub const Context = struct {
                 defer client.deinit();
                 const buffer = try self.c.a.alloc(u8, 1024 * 1024);
                 var writer: Io.Writer = .fixed(buffer);
-                const response = try client.fetch(.{ .location = .{ .url = self.url }, .method = self.method, .response_writer = &writer, .redirect_behavior = .not_allowed });
+                const response = try client.fetch(.{ .location = .{ .url = self.url }, .method = self.method, .payload = if (self.method.requestHasBody()) "" else null, .response_writer = &writer, .redirect_behavior = .not_allowed });
                 try check(response.status == .ok, "independent browser HTTP request is 200");
                 return writer.buffered();
             }
@@ -238,4 +238,64 @@ pub fn printLog(c: Context, path: []const u8) void {
     var excerpt: [8192]u8 = undefined;
     const n = reader.interface.readSliceShort(&excerpt) catch return;
     std.debug.print("{s}: {s}\n", .{ path, excerpt[0..n] });
+}
+
+pub const Client = struct {
+    c: Context,
+    target: []const u8,
+    endpoint: bool = false,
+    tab: ?[]const u8 = null,
+    pub fn run(self: Client, args: []const []const u8, options: Context.Invoke) !V {
+        const argv = try std.mem.concat(self.c.a, []const u8, &.{ &.{ if (self.endpoint) "--endpoint" else "--session", self.target }, args, if (self.tab) |tab| &.{ "--tab", tab } else &.{} });
+        return self.c.invoke(argv, options);
+    }
+    pub fn result(self: Client, args: []const []const u8) !V {
+        return field(try self.run(args, .{}), "result");
+    }
+    pub fn expect(self: Client, args: []const []const u8, expected: anytype) !void {
+        try equal(try self.result(args), expected);
+    }
+    pub fn failure(self: Client, args: []const []const u8, expected: []const u8) !V {
+        const reply = try self.run(args, .{ .ok = false });
+        try equal(try field(reply, "err"), expected);
+        return reply;
+    }
+};
+/// Interruption fixtures retain an exact child. Files avoid pipe-pressure races;
+/// responses are bounded when read and diagnostics are bounded on every failure.
+pub const Pending = struct {
+    c: Context,
+    child: P.Child,
+    out: Io.File,
+    err: Io.File,
+    out_path: []const u8,
+    err_path: []const u8,
+    pub fn start(c: Context, name: []const u8, args: []const []const u8) !Pending {
+        const out_path = try c.path(try c.a.print("{s}.stdout", .{name}));
+        const err_path = try c.path(try c.a.print("{s}.stderr", .{name}));
+        const out = try Io.Dir.cwd().createFile(c.io, out_path, .{ .read = true });
+        errdefer out.close(c.io);
+        const err = try Io.Dir.cwd().createFile(c.io, err_path, .{ .read = true });
+        errdefer err.close(c.io);
+        const child = try P.Child.spawn(std.heap.page_allocator, c.io, .{ .argv = try std.mem.concat(c.a, []const u8, &.{ &.{c.exe}, args }), .stdout = .{ .file = out }, .stderr = .{ .file = err } });
+        return .{ .c = c, .child = child, .out = out, .err = err, .out_path = out_path, .err_path = err_path };
+    }
+    pub fn failed(self: *Pending, timeout_ms: u32) !void {
+        errdefer printLog(self.c, self.err_path);
+        const term = try self.child.wait(timeout_ms);
+        try check(term != .exited or term.exited != 0, "interrupted client exits nonzero");
+    }
+    pub fn deinit(self: *Pending) void {
+        _ = self.child.stop(10000) catch |err| std.debug.print("Pending cleanup: {s}\n", .{@errorName(err)});
+        self.child.deinit();
+        self.out.close(self.c.io);
+        self.err.close(self.c.io);
+    }
+};
+pub fn waitFlag(io: Io, flag: *std.atomic.Value(bool), timeout_ms: u32) !void {
+    const end = Io.Clock.awake.now(io).addDuration(.fromMilliseconds(timeout_ms));
+    while (!flag.load(.acquire)) {
+        if (Io.Clock.awake.now(io).nanoseconds >= end.nanoseconds) return error.FixtureObservationTimeout;
+        try io.sleep(.fromMilliseconds(5), .awake);
+    }
 }

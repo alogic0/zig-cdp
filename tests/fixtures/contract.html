@@ -1,0 +1,17 @@
+<!doctype html><label>Name<input id="name"></label>
+                <button id="save">Save</button><p id="result"></p>
+                <input type="file" id="file"><button id="export">Export</button>
+                <button id="disabled" disabled>Disabled</button>
+                <script>
+                window.events=[];
+                document.querySelector('#name').oninput=e=>events.push(e.isTrusted);
+                document.querySelector('#save').onclick=e=>{
+                    events.push(e.isTrusted);
+                    document.querySelector('#result').textContent=document.querySelector('#name').value;
+                };
+                document.querySelector('#export').onclick=()=>{
+                    const a=document.createElement('a');
+                    a.href=URL.createObjectURL(new Blob(['exact,bytes\r\n']));
+                    a.download='fixture.csv';a.click();
+                };
+                </script>

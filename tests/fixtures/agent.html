@@ -1,0 +1,15 @@
+<!doctype html><title>Agent fixture</title>
+      <label>Name<input id="name"></label><textarea aria-label="Notes"></textarea>
+      <div contenteditable role="textbox" aria-label="Editor"></div>
+      <input type="range" aria-label="Volume">
+      <button id="save">Save</button><output id="result"></output>
+      <select aria-label="Choice"><option value="a">Alpha</option><option value="b">Beta</option>
+      <optgroup disabled><option value="bad">Disabled option</option></optgroup></select>
+      <button disabled>Disabled</button><button>Duplicate</button><button>Duplicate</button>
+      <input type="file" id="file" hidden><button id="export">Export</button>
+      <span id="hidden" hidden>Hidden</span>
+      <div style="position:relative;width:100px;height:40px"><button id="covered">Covered</button>
+      <div style="position:absolute;inset:0;background:white"></div></div>
+      <script>window.trusted=[];document.addEventListener('input',e=>trusted.push(e.isTrusted));
+      document.querySelector('#save').onclick=()=>document.querySelector('#result').textContent=document.querySelector('#name').value;
+      document.querySelector('#export').onclick=()=>{let a=document.createElement('a');a.href=window.fixtureDownloadUrl || URL.createObjectURL(new Blob(['agent-download']));a.download='agent.txt';a.click();};</script>
