@@ -55,8 +55,11 @@ jobs:
       - name: Test library, run example, and build CLI
         run: zig build test check example install -Doptimize=${{ matrix.optimize }} --summary all
 
-      - name: Test CLI sessions
-        run: zig build test-cli -Doptimize=${{ matrix.optimize }} --summary all
+      - name: Test CLI sessions with one CPU
+        shell: bash
+        run: |
+          cpu=$(awk '/Cpus_allowed_list/{sub(/[-,].*/, "", $2); print $2}' /proc/self/status)
+          taskset --cpu-list "$cpu" zig build test-cli -Doptimize=${{ matrix.optimize }} --summary all
 
       - name: Test headed browser on Xvfb
         run: zig build test-headed -Doptimize=${{ matrix.optimize }} --summary all

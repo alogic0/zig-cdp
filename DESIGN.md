@@ -33,6 +33,8 @@ Journey results borrow arena storage. Socket use is serialized by the caller.
 Graceful shutdown requests browser closure and waits up to two seconds; fallback
 cleanup joins the exact child and terminates its owned process group before
 removing the temporary workspace. Calling stop again is harmless.
+Graceful closure and its deadline require concurrent scheduling. If either task
+cannot be admitted, join any admitted work before process cleanup.
 
 Protocol frames and queued messages are bounded; malformed replies and wire
 failures seal the affected connection. The initial extraction retains the finite
@@ -117,6 +119,11 @@ diagnostics or freeing storage. All frames in an operation share an absolute rea
 allows at most 100 ms for the last in-flight RPC to finish before abandoning
 the connection; remote-object cleanup has a separate 200 ms allowance. A
 transport failure seals the connection, while ordinary locator errors do not.
+
+Server/signal, accept/tick and operation/deadline races use explicit concurrency.
+They must progress even when the I/O runtime has no spare async workers, as on
+a single-core host. An unavailable concurrency slot is an error with joined
+cleanup; these tasks cannot fall back to running inline before their peers start.
 
 ## Delivery and verification
 

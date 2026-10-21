@@ -1,5 +1,27 @@
 # Current delivery
 
+## Low-core session scheduling, October 21, 2026
+
+The first hosted CLI checks exposed a timeout on the initial session `status`
+command. It reproduces locally with two CPUs: the pinned I/O runtime may run
+`async` tasks inline when its worker pool is full, preventing a competing task
+from starting. Session/signal, accept/tick, command/deadline and borrowed-endpoint
+races now require concurrent scheduling. Graceful browser closure also races its
+deadline concurrently and joins admitted work before fallback process cleanup.
+No public API, ownership policy or acceptance threshold changes.
+
+The full CLI suite, ten library tests, example and headed Xvfb check pass in
+Debug with two CPUs and ReleaseSafe with one CPU. All six CLI groups pass;
+descriptors remain seven. CI now runs the complete CLI suite with one CPU in
+both profiles so additional runner cores cannot hide this regression.
+
+CI also tests the exact bundled HTTP 0.2.1 and support 0.1.0 archives in both
+profiles, including examples and isolated consumers with empty package caches.
+All four provider jobs passed the first hosted run; its two CLI failures are
+retained as failures. The CDP package consumer now builds from an exported source
+tree and a fresh cache. Per-commit hosted results are available in
+[GitHub Actions](https://github.com/alogic0/zig-cdp/actions?query=branch%3Apublication-checks).
+
 ## Native CLI acceptance migration completed, October 21, 2026
 
 `zig build test-cli` now runs the native Zig subprocess suite. The Python runner

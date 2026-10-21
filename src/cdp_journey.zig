@@ -158,10 +158,12 @@ pub const Browser = struct {
         const Closed = union(enum) { protocol: anyerror!void, deadline: std.Io.Cancelable!void };
         var results: [2]Closed = undefined;
         var closing = std.Io.Select(Closed).init(self.io, &results);
-        closing.async(.protocol, closeProtocol, .{self});
-        closing.async(.deadline, std.Io.sleep, .{ self.io, .fromSeconds(2), .awake });
-        _ = closing.await() catch {};
-        closing.cancelDiscard();
+        graceful: {
+            defer closing.cancelDiscard();
+            closing.concurrent(.protocol, closeProtocol, .{self}) catch break :graceful;
+            closing.concurrent(.deadline, std.Io.sleep, .{ self.io, .fromSeconds(2), .awake }) catch break :graceful;
+            _ = closing.await() catch {};
+        }
         self.socket.close();
         _ = self.child.wait(2000) catch {
             _ = self.child.stop(0) catch {};

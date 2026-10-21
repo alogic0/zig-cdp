@@ -16,8 +16,8 @@ pub fn run(a: A, io: std.Io, endpoint: []const u8, input: session.Request) ![]co
     var joined = false;
     defer if (!joined) select.cancelDiscard();
     const budget = input.timeout_ms orelse 30_000;
-    select.async(.value, execute, .{ a, io, endpoint, input, &diagnostics, now(io) + budget });
-    select.async(.budget, std.Io.sleep, .{ io, .fromMilliseconds(@as(i64, budget) + 300), .awake });
+    try select.concurrent(.value, execute, .{ a, io, endpoint, input, &diagnostics, now(io) + budget });
+    try select.concurrent(.budget, std.Io.sleep, .{ io, .fromMilliseconds(@as(i64, budget) + 300), .awake });
     const result = try select.await();
     select.cancelDiscard();
     joined = true;

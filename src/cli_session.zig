@@ -117,8 +117,9 @@ pub fn serve(backing: A, io: std.Io, options: Options) !void {
     var results: [2]Result = undefined;
     var select = std.Io.Select(Result).init(io, &results);
     defer select.cancelDiscard();
-    select.async(.server, loop, .{ backing, io, &listener, &state, options.idle_seconds });
-    select.async(.signal, awaitSignal, .{io});
+    // Both branches must progress independently, even with no spare async slots.
+    try select.concurrent(.server, loop, .{ backing, io, &listener, &state, options.idle_seconds });
+    try select.concurrent(.signal, awaitSignal, .{io});
     switch (try select.await()) {
         .server => |result| try result,
         .signal => |result| try result,
@@ -140,8 +141,8 @@ fn loop(backing: A, io: std.Io, listener: *std.Io.net.Server, state: *State, idl
             .tick => {},
         };
     }
-    select.async(.stream, std.Io.net.Server.accept, .{ listener, io });
-    select.async(.tick, std.Io.sleep, .{ io, .fromMilliseconds(100), .awake });
+    try select.concurrent(.stream, std.Io.net.Server.accept, .{ listener, io });
+    try select.concurrent(.tick, std.Io.sleep, .{ io, .fromMilliseconds(100), .awake });
     var last_activity = std.Io.Clock.awake.now(io).toMilliseconds();
     while (!state.closed) {
         switch (try select.await()) {
@@ -153,7 +154,7 @@ fn loop(backing: A, io: std.Io, listener: *std.Io.net.Server, state: *State, idl
                     state.failed = true;
                     std.debug.print("Browser session failed: {s}\n", .{@errorName(err)});
                 };
-                select.async(.tick, std.Io.sleep, .{ io, .fromMilliseconds(100), .awake });
+                try select.concurrent(.tick, std.Io.sleep, .{ io, .fromMilliseconds(100), .awake });
             },
             .stream => |result| {
                 const stream = try result;
@@ -170,7 +171,7 @@ fn loop(backing: A, io: std.Io, listener: *std.Io.net.Server, state: *State, idl
                     std.debug.print("Client reply failed: {s}\n", .{@errorName(err)});
                 };
                 last_activity = std.Io.Clock.awake.now(io).toMilliseconds();
-                if (!state.closed) select.async(.stream, std.Io.net.Server.accept, .{ listener, io });
+                if (!state.closed) try select.concurrent(.stream, std.Io.net.Server.accept, .{ listener, io });
             },
         }
     }
@@ -190,8 +191,8 @@ fn respond(a: A, io: std.Io, stream: Stream, state: *State) ![]const u8 {
     var joined = false;
     defer if (!joined) select.cancelDiscard();
     const budget = parsed.value.timeout_ms orelse @as(u32, @intCast(state.timeout_ms));
-    select.async(.value, State.execute, .{ state, a, parsed.value, &diagnostics, @as(i64, @intCast(std.Io.Clock.awake.now(io).toMilliseconds())) + budget });
-    select.async(.budget, std.Io.sleep, .{ io, .fromMilliseconds(@as(i64, budget) + 300), .awake });
+    try select.concurrent(.value, State.execute, .{ state, a, parsed.value, &diagnostics, @as(i64, @intCast(std.Io.Clock.awake.now(io).toMilliseconds())) + budget });
+    try select.concurrent(.budget, std.Io.sleep, .{ io, .fromMilliseconds(@as(i64, budget) + 300), .awake });
     const result = try select.await();
     select.cancelDiscard();
     joined = true;
