@@ -33,6 +33,12 @@ file between creation and its record write. The fixture now polls for a valid
 port and browser path while retaining its exact child and the original ten-second
 budget. Focused endpoint acceptance passes both profiles with one CPU.
 
+Click stability sampling also preserves `ElementNotStable` if its budget expires
+between the first point observation and the comparison delay. It previously
+leaked a generic `Timeout` at that boundary. Input remains undispatched;
+cancellation stays distinct. Agent and borrowed-endpoint acceptance pass both
+profiles with one CPU and the original 350 ms moving-control budget.
+
 CI also tests the exact bundled HTTP 0.2.1 and support 0.1.0 archives in both
 profiles, including examples and isolated consumers with empty package caches.
 All four provider jobs passed the first hosted run; its two CLI failures are

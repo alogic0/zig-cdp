@@ -294,7 +294,7 @@ pub const Page = struct {
             defer view.release(id);
             var info = try view.helper(id, "point", .{});
             if (J.str(J.field(info, "reason")).len == 0) {
-                try self.pause();
+                self.pause() catch |err| return if (err == error.Canceled) err else error.ElementNotStable;
                 info = try view.helper(id, "point", info);
             }
             const reason = J.str(J.field(info, "reason"));
