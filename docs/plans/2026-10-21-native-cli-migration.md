@@ -4,7 +4,7 @@ The [requirements](2026-10-21-native-cli-test-requirements.md) authorize the com
 port of `tests/cli.py`, preserving subprocess acceptance and existing thresholds.
 Starting source: `4f50732127c333cf36f95ad98b5289c50c5f3a7c`, Zig 0.17.0.
 The requirements file existed untracked before this task; its original proposal
-is preserved in foundation commit `bd5d3d3`.
+is preserved in foundation commit `06f06a7`.
 No public CDP API or production behavior change is selected.
 
 ## Finite scenario map
@@ -45,8 +45,8 @@ workspaces, capture, readiness and resource measurements use the providers.
 
 ## Verification
 
-Raw logs and reference bytes are retained outside caches at
-`cdp-native-cli-evidence-o8B0ll`.
+Raw logs and reference bytes are retained privately outside the repository in
+the evidence archive named `cdp-native-cli-evidence-o8B0ll`.
 The original Python suites pass both profiles against separately retained CLI
 binaries. RSS: Debug 8256→8724 KiB, Safe 3032→3388 KiB; descriptors 7→7.
 The complete native suite passes all six groups in Debug and ReleaseSafe (four

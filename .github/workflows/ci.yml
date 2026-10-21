@@ -62,5 +62,63 @@ jobs:
         run: zig build test-headed -Doptimize=${{ matrix.optimize }} --summary all
 
       - name: Test package consumer
-        working-directory: tests/package
-        run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
+        shell: bash
+        run: |
+          package_dir=$(mktemp -d)
+          git archive HEAD | tar -x -C "$package_dir"
+          export ZIG_GLOBAL_CACHE_DIR="$package_dir/cache"
+          cd "$package_dir/tests/package"
+          zig build test -Doptimize=${{ matrix.optimize }} --summary all
+
+  test-providers:
+    name: ${{ matrix.provider.name }} (${{ matrix.optimize }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        optimize: [Debug, ReleaseSafe]
+        provider:
+          - name: http_fixture
+            archive: vendor/zig-http-fixture-b51873725fecd7936078e64026b6ea664783773e.tar.gz
+          - name: test_support
+            archive: vendor/zig-test-support-e23cb642765677807c2e80f613fb873f9780554a.tar.gz
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read pinned Zig version
+        id: zig-version
+        run: echo "version=$(cat .zigversion)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ steps.zig-version.outputs.version }}
+          cache-key: ${{ matrix.provider.name }}-${{ matrix.optimize }}
+
+      - name: Unpack the pinned provider archive
+        id: provider
+        shell: bash
+        run: |
+          provider_dir=$(mktemp -d)
+          tar -xzf "${{ matrix.provider.archive }}" -C "$provider_dir"
+          cmp .zigversion "$provider_dir/.zigversion"
+          echo "root=$provider_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Test provider and example
+        working-directory: ${{ steps.provider.outputs.root }}
+        run: zig build test example -Doptimize=${{ matrix.optimize }} --summary all
+
+      - name: Test isolated immutable package consumer
+        shell: bash
+        run: |
+          consumer_dir=$(mktemp -d)
+          cp "${{ matrix.provider.archive }}" "$consumer_dir/provider.tar.gz"
+          cp "${{ steps.provider.outputs.root }}/tests/package/"* "$consumer_dir/"
+          export ZIG_GLOBAL_CACHE_DIR="$consumer_dir/cache"
+          cd "$consumer_dir"
+          zig fetch --save=${{ matrix.provider.name }} ./provider.tar.gz
+          zig build test -Doptimize=${{ matrix.optimize }} --summary all
