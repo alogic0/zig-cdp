@@ -70,6 +70,9 @@ pub fn build(b: *std.Build) void {
     }) });
     // Keep graphical checks off the user's desktop, even in a Wayland session.
     const headed_run = b.addSystemCommand(&.{ "env", "-u", "WAYLAND_DISPLAY", "-u", "WAYLAND_SOCKET", "XDG_SESSION_TYPE=x11", "GDK_BACKEND=x11", "xvfb-run", "-a", "-s", "-screen 0 1600x1000x24" });
+    if (b.option(bool, "headed-window-manager", "Run headed checks with Openbox inside Xvfb") orelse false) {
+        headed_run.addArgs(&.{ "sh", "-c", "openbox --sm-disable >/dev/null 2>&1 & wm_pid=$!; trap 'kill \"$wm_pid\"; wait \"$wm_pid\"' EXIT; \"$@\"", "headed-test" });
+    }
     headed_run.addArtifactArg(headed_tests);
     b.step("test-headed", "Check native viewport resizing (requires xvfb-run)").dependOn(&headed_run.step);
 }

@@ -20,6 +20,10 @@ resize assertion failed. The headed fixture now activates each document before
 observing its viewport and reports native bounds, visibility, scale and page
 geometry on failure. Its existing size tolerances and three-second deadline
 are unchanged; the focused headed check passes locally in both modes.
+Hosted diagnostics still showed a 900×700 native window with the preceding
+1100-pixel viewport. CI now requests an owned Openbox window manager inside
+Xvfb through `-Dheaded-window-manager=true`; local bare-Xvfb checks remain
+available. The window manager is terminated and joined after the test.
 
 CI also tests the exact bundled HTTP 0.2.1 and support 0.1.0 archives in both
 profiles, including examples and isolated consumers with empty package caches.
