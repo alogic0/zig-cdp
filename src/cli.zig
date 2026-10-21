@@ -2,9 +2,11 @@ const std = @import("std");
 const session = @import("cli_session.zig");
 const J = @import("cdp").journey;
 const Agent = @import("cdp").agent;
+const endpoint = @import("cli_endpoint.zig");
 
 const help =
     \\Usage: zig-cdp --session PATH COMMAND [ARGS]
+    \\       zig-cdp --endpoint URL COMMAND [--tab ID] [ARGS]
     \\
     \\serve [--allow ORIGIN]... [--browser PATH] [--headed]
     \\      [--user-data-dir PATH] [--idle-timeout SECONDS]
@@ -47,6 +49,9 @@ const help =
     \\The default idle timeout is 900 seconds. Replies are JSON; failures exit 1.
     \\File paths are resolved from the client's current working directory.
     \\Use --session before COMMAND; --help and --version need no session.
+    \\--endpoint accepts loopback HTTP discovery or a browser WebSocket URL.
+    \\Endpoint commands disconnect when done and never stop the browser.
+    \\Use --tab ID for page operations; close-tab explicitly closes one tab.
     \\
 ;
 
@@ -72,10 +77,13 @@ fn run(init: std.process.Init) !u8 {
         try std.Io.File.stdout().writeStreamingAll(init.io, "zig-cdp 0.1.0\n");
         return 0;
     }
-    if (!std.mem.eql(u8, first, "--session")) return error.ExpectedSessionOption;
-    const path = try absolute(a, init.io, iterator.next() orelse return error.MissingSessionPath);
+    const borrowed = std.mem.eql(u8, first, "--endpoint");
+    if (!borrowed and !std.mem.eql(u8, first, "--session")) return error.ExpectedSessionOption;
+    const target = iterator.next() orelse return error.MissingSessionPath;
+    const path = if (borrowed) target else try absolute(a, init.io, target);
     const command = iterator.next() orelse return error.MissingCommand;
     if (std.mem.eql(u8, command, "serve")) {
+        if (borrowed) return error.InvalidEndpointCommand;
         var options: session.Options = .{ .directory = path };
         var origins: std.ArrayList([]const u8) = .empty;
         while (iterator.next()) |arg| {
@@ -165,7 +173,7 @@ fn run(init: std.process.Init) !u8 {
         },
         else => {},
     }
-    const reply = try session.request(a, init.io, path, input);
+    const reply = if (borrowed) try endpoint.run(a, init.io, path, input) else try session.request(a, init.io, path, input);
     const parsed = try std.json.parseFromSlice(std.json.Value, a, reply, .{});
     defer parsed.deinit();
     if (output) |destination| if (J.boolean(J.field(parsed.value, "ok"))) {

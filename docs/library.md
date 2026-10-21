@@ -221,3 +221,15 @@ A failed wire connection must be closed rather than reused. Only the exact stale
 interception cancellation error is ignored. The tests cover finite input,
 upload/download, isolation, and cleanup cases; they do not prove every protocol
 fault, browser version, or application workflow.
+
+## Borrowing an existing browser
+
+`cdp.agent.Connection.connect(allocator, io, endpoint)` owns CDP connections
+without owning Chrome. `tabs()` lists page targets; `page(target_id)` opens a
+page WebSocket that the caller must close. Use that socket with `agent.Page`
+and a request arena. Serialize socket operations and release each command
+before destroying its arena. `disconnect()` releases the browser WebSocket;
+it never issues `Browser.close` or disposes contexts. The allocator supplied to
+Connection must outlive its sockets. CLI endpoint mode supplies a deadline
+covering discovery, connection and the command; library consumers must provide
+their own cancellation/deadline policy around connection establishment.

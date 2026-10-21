@@ -283,3 +283,32 @@ Headless automation and cleanup have finite test coverage. Automated Xvfb checks
 cover native viewport resizing in default and isolated contexts. One X11
 saved-profile window was also checked manually. These checks do not establish
 all graphical session behavior or every Chrome version.
+
+## Existing-browser attachment
+
+Use `--endpoint http://127.0.0.1:PORT` or a loopback browser WebSocket URL in
+place of `--session PATH`. HTTP discovery uses `/json/version`. Only `localhost`
+and `127.0.0.1` endpoints are accepted. Authentication, URL queries, fragments,
+non-root HTTP paths, and page WebSocket URLs are rejected.
+
+`tabs`, `status`, `new-tab [URL]`, `switch-tab ID`, `close-tab ID`, and `close`
+operate directly on the external browser. Every page command requires `--tab
+ID`; there is no selection stored between invocations. `switch-tab` activates
+that tab in Chrome. `new-tab` creates a default-context tab and returns its ID.
+`close` disconnects, while `close-tab` deliberately closes the specified target.
+`allow`, `timeout` and `serve` are session commands; use `--timeout MS` for an
+attached command's budget (30 seconds by default).
+
+Attached inspection and actions do not change device metrics, inject persistent
+helpers, set a download directory, or install background network interception.
+An explicit `download LOCATOR PATH` temporarily intercepts attachment responses
+to copy up to 20 MiB to PATH, then removes its interception. Blob/data downloads
+are copied from the page; Chrome may also save its usual copy. Other requests
+continue normally. This finite download support does not cover arbitrary
+application streaming protocols. Files are created with private permissions.
+
+Disconnect, errors, SIGINT and SIGTERM leave the external browser and its profile
+alive. Page changes and explicitly created/closed tabs remain as requested.
+Timeout after dispatch can leave an action in progress: inspect before retrying.
+A command requiring a promise that never settles can seal its own connection;
+the next endpoint command establishes a fresh connection.

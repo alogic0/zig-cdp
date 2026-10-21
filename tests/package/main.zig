@@ -18,4 +18,11 @@ test "independent consumer launches and evaluates" {
     try std.testing.expect(J.number(J.field(snapshot, "returned_nodes")) > 0);
     try command.click(.{ .role = "button", .name = "Package action" });
     try std.testing.expectEqual(.completed, diagnostics.action);
+    var connection = try Agent.Connection.connect(arena.allocator(), std.testing.io, try arena.allocator().print("http://127.0.0.1:{d}", .{browser.client.port}));
+    defer connection.disconnect();
+    try std.testing.expect((try connection.tabs()).array.items.len > 0);
+    var borrowed = try connection.page(page.target);
+    borrowed.close();
+    connection.disconnect();
+    try std.testing.expectEqual(@as(i64, 42), J.number(try page.eval("42")));
 }

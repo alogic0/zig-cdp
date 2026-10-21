@@ -1,5 +1,20 @@
 # Current delivery
 
+## Existing-browser attachment, October 21, 2026
+
+Added loopback HTTP/browser-WebSocket endpoint commands and the public
+`agent.Connection` API. Page commands require explicit target IDs. Disconnect,
+command interruption and errors preserve the external browser, profile,
+unrelated tabs and native viewport. Download capture is scoped to an explicit
+command; normal attachment installs no interceptors or persistent helpers.
+HTTP discovery and WebSocket upgrades validate protocol replies.
+
+The real-browser CLI suite passes in Debug and ReleaseSafe in both owned and
+external modes, covering semantic inspection/actions, HTTP and blob downloads,
+explicit targets, timeout recovery, SIGINT/SIGTERM and ownership preservation.
+The independent consumer also checks the public borrowed-connection API.
+
+
 ## Agent inspection and interactions, October 21, 2026
 
 Implemented the first two stages of the agent-usability plan: bounded UTF-8
@@ -18,7 +33,7 @@ semantic actions, disabled/covered/ambiguous controls, contenteditable and
 trusted input, hidden uploads, downloads, Unicode and output bounds. Both modes
 also pass 9/9 existing library tests and the independent consumer, which now
 uses the public agent API. Existing-profile and signal-cleanup checks pass.
-Existing-browser attachment and longer-session resource work follow next.
+Existing-browser attachment is implemented; longer-session resource work follows next.
 
 ## Publication preparation, October 21, 2026
 

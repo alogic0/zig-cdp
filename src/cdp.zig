@@ -554,6 +554,8 @@ pub const CdpClient = struct {
             if (header_len >= 4 and std.mem.eql(u8, header_buf[header_len - 4 .. header_len], "\r\n\r\n")) break;
         }
         const headers = header_buf[0..header_len];
+        if (!std.mem.endsWith(u8, headers, "\r\n\r\n") or
+            (!std.mem.startsWith(u8, headers, "HTTP/1.1 200 ") and !std.mem.startsWith(u8, headers, "HTTP/1.0 200 "))) return error.InvalidDiscoveryResponse;
 
         var content_length: usize = 0;
         if (std.mem.indexOf(u8, headers, "Content-Length:") orelse std.mem.indexOf(u8, headers, "content-length:")) |idx| {
@@ -566,6 +568,7 @@ pub const CdpClient = struct {
         if (content_length == 0) {
             return try self.alloc.alloc(u8, 0);
         }
+        if (content_length > 16 * 1024 * 1024) return error.DiscoveryTooLarge;
 
         const body = try self.alloc.alloc(u8, content_length);
         try r.interface.readSliceAll(body);
@@ -581,9 +584,12 @@ pub const CdpClient = struct {
     pub fn connectBrowser(self: CdpClient) !WsSession {
         const body = try self.http("GET", "/json/version");
         defer self.alloc.free(body);
-        const parsed = try std.json.parseFromSlice(std.json.Value, self.alloc, body, .{});
+        const parsed = std.json.parseFromSlice(std.json.Value, self.alloc, body, .{}) catch return error.InvalidProtocolReply;
         defer parsed.deinit();
-        return self.connectWs(parsed.value.object.get("webSocketDebuggerUrl").?.string);
+        if (parsed.value != .object) return error.InvalidProtocolReply;
+        const url = parsed.value.object.get("webSocketDebuggerUrl") orelse return error.InvalidProtocolReply;
+        if (url != .string) return error.InvalidProtocolReply;
+        return self.connectWs(url.string);
     }
 
     pub fn listTargets(self: CdpClient) ![]Target {
@@ -655,12 +661,14 @@ pub const CdpClient = struct {
 
     pub fn connectWs(self: CdpClient, ws_url_or_path: []const u8) !WsSession {
         var path = ws_url_or_path;
-        const prefix = try std.fmt.allocPrint(self.alloc, "ws://127.0.0.1:{d}", .{self.port});
-        defer self.alloc.free(prefix);
-
-        if (std.mem.startsWith(u8, path, prefix)) {
-            path = path[prefix.len..];
+        if (std.mem.startsWith(u8, path, "ws://")) {
+            const uri = std.Uri.parse(path) catch return error.InvalidEndpoint;
+            const host = try (uri.host orelse return error.InvalidEndpoint).toRawMaybeAlloc(self.alloc);
+            if ((!std.mem.eql(u8, host, "127.0.0.1") and !std.mem.eql(u8, host, "localhost")) or
+                (uri.port orelse 80) != self.port or uri.user != null or uri.password != null or uri.query != null or uri.fragment != null) return error.InvalidEndpoint;
+            path = try uri.path.toRawMaybeAlloc(self.alloc);
         }
+        if (!std.mem.startsWith(u8, path, "/") or std.mem.indexOfAny(u8, path, " \r\n") != null) return error.InvalidEndpoint;
 
         const stream = try (try std.Io.net.IpAddress.parse("127.0.0.1", self.port)).connect(self.io, .{ .mode = .stream });
         errdefer stream.close(self.io);
@@ -698,6 +706,14 @@ pub const CdpClient = struct {
         if (!std.mem.startsWith(u8, resp, "HTTP/1.1 101")) {
             return error.WebSocketUpgradeFailed;
         }
+        var valid_accept = false;
+        var lines = std.mem.splitSequence(u8, resp, "\r\n");
+        while (lines.next()) |line| {
+            const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+            if (std.ascii.eqlIgnoreCase(line[0..colon], "Sec-WebSocket-Accept"))
+                valid_accept = std.mem.eql(u8, std.mem.trim(u8, line[colon + 1 ..], " \t"), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+        }
+        if (!valid_accept) return error.WebSocketUpgradeFailed;
 
         return WsSession{
             .stream = stream,

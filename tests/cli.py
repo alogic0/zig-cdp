@@ -2,6 +2,7 @@
 """Exercise the installed command interface across independent processes."""
 import http.server
 import json
+import os
 from pathlib import Path
 import select
 import signal
@@ -67,6 +68,58 @@ class Session:
 
     def __exit__(self, *_):
         self.abort()
+
+
+class ExternalBrowser:
+    """A fixture process owned by the test, never by the CLI under test."""
+    def __init__(self, root):
+        self.profile = root / "external-profile"
+        (self.profile / "Default").mkdir(parents=True)
+        self.downloads = root / "external-downloads"
+        self.downloads.mkdir()
+        (self.profile / "Default" / "Preferences").write_text(json.dumps({
+            "download": {"default_directory": str(self.downloads), "prompt_for_download": False},
+        }))
+        (self.profile / "keep").write_text("external-owner")
+        self.log = tempfile.TemporaryFile()
+        executable = next(path for path in (
+            "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium", "/usr/bin/chromium-browser",
+        ) if Path(path).is_file())
+        self.process = subprocess.Popen([
+            executable, "--headless=new", "--remote-debugging-address=127.0.0.1",
+            "--remote-debugging-port=0", "--user-data-dir=" + str(self.profile),
+            "--no-first-run", "--no-default-browser-check", "about:blank",
+        ], stdout=self.log, stderr=self.log, start_new_session=True)
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                assert self.process.poll() is None, "external browser exited"
+                active = self.profile / "DevToolsActivePort"
+                if active.exists():
+                    port, browser = active.read_text().splitlines()[:2]
+                    self.endpoint = "http://127.0.0.1:" + port
+                    self.websocket = "ws://127.0.0.1:" + port + browser
+                    break
+                time.sleep(0.02)
+            else:
+                raise AssertionError("external browser startup timeout")
+        except BaseException:
+            self.__exit__()
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(self.process.pid, signal.SIGKILL)
+                self.process.wait(timeout=5)
+        self.log.close()
 
 
 def raw_request(session, payload):
@@ -183,8 +236,12 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         if self.path == "/background":
             self.background_seen.set()
         body = b'<!doctype html><title>Fixture</title><p id="message">Local page</p>'
+        if self.path == "/download":
+            body = b"agent-download"
         self.send_response(200)
-        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Type", "application/octet-stream" if self.path == "/download" else "text/html")
+        if self.path == "/download":
+            self.send_header("Content-Disposition", 'attachment; filename="agent.txt"')
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -193,10 +250,13 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def exercise_agent_commands(server, root):
+def exercise_agent_commands(server, root, endpoint=None, tab=None, download_url=None):
     def invoke(*args, ok=True, stdin=None):
+        prefix = [EXE, "--session", str(server.path), *args] if endpoint is None else [
+            EXE, "--endpoint", endpoint, args[0], "--tab", tab, *args[1:],
+        ]
         result = subprocess.run(
-            [EXE, "--session", str(server.path), *args],
+            prefix,
             input=stdin, capture_output=True, text=True, timeout=20,
         )
         reply = json.loads(result.stdout)
@@ -218,7 +278,9 @@ def exercise_agent_commands(server, root):
       <div style="position:absolute;inset:0;background:white"></div></div>
       <script>window.trusted=[];document.addEventListener('input',e=>trusted.push(e.isTrusted));
       document.querySelector('#save').onclick=()=>document.querySelector('#result').textContent=document.querySelector('#name').value;
-      document.querySelector('#export').onclick=()=>{let a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['agent-download']));a.download='agent.txt';a.click();};</script>""")
+      document.querySelector('#export').onclick=()=>{let a=document.createElement('a');a.href=window.fixtureDownloadUrl || URL.createObjectURL(new Blob(['agent-download']));a.download='agent.txt';a.click();};</script>""")
+    if download_url is not None:
+        invoke("eval", "window.fixtureDownloadUrl=" + json.dumps(download_url))
     nodes = invoke("snapshot")["result"]["nodes"]
     assert any(n["role"] == "slider" and n["name"] == "Volume" for n in nodes), nodes
     assert any(n["role"] == "textbox" and n["name"] == "Name" for n in nodes)
@@ -269,13 +331,70 @@ def exercise_agent_commands(server, root):
     assert destination.read_text() == "agent-download"
     invoke("content", '<div style="height:3000px">Tall page 🧭</div>')
     document = invoke("eval", "({w:document.documentElement.scrollWidth,h:document.documentElement.scrollHeight})")["result"]
+    window = invoke("eval", "({w:innerWidth,h:innerHeight})")["result"]
     invoke("screenshot", "--out", str(root / "viewport.png"), "--viewport")
     invoke("screenshot", "--out", str(root / "full.png"), "--full-page")
     viewport = struct.unpack("!II", (root / "viewport.png").read_bytes()[16:24])
     full = struct.unpack("!II", (root / "full.png").read_bytes()[16:24])
-    assert viewport == (1280, 720), viewport
+    assert viewport == (window["w"], window["h"]), viewport
     assert full == (document["w"], document["h"]) and full[1] >= 3000, full
     print("Agent inspection, semantic actions, stdin/files, errors and screenshot bounds: passed", flush=True)
+
+
+def exercise_endpoint(root):
+    def invoke(endpoint, *args, ok=True):
+        result = subprocess.run([EXE, "--endpoint", endpoint, *args], capture_output=True, text=True, timeout=10)
+        value = json.loads(result.stdout)
+        assert value["ok"] is ok, (args, value, result.stderr)
+        assert (result.returncode == 0) is ok
+        return value
+
+    with ExternalBrowser(root) as browser, http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fixture) as fixture:
+        thread = threading.Thread(target=fixture.serve_forever, daemon=True)
+        thread.start()
+        try:
+            before = invoke(browser.endpoint, "tabs")["result"]
+            original = {tab["id"]: tab["url"] for tab in before}
+            assert invoke(browser.websocket, "status")["result"]["ownership"] == "external"
+            assert invoke("http://example.invalid:9239", "tabs", ok=False)["err"] == "InvalidEndpoint"
+            assert invoke(browser.endpoint, "eval", "true", ok=False)["err"] == "MissingTab"
+            origin = f"http://127.0.0.1:{fixture.server_port}"
+            new = invoke(browser.endpoint, "new-tab", origin)["result"]["id"]
+            def evaluate(expression):
+                return invoke(browser.endpoint, "eval", expression, "--tab", new)["result"]
+            geometry = evaluate("({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})")
+            exercise_agent_commands(browser, root, endpoint=browser.endpoint, tab=new, download_url=origin + "/download")
+            assert evaluate("({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})") == geometry
+            assert evaluate("typeof window.__cdp") == "undefined", "attachment injected journey globals"
+            # Blob downloads also retain the browser's configured default path.
+            invoke(browser.endpoint, "content", '<a id="blob" download="blob.txt">Blob</a>', "--tab", new)
+            evaluate("document.querySelector('#blob').href=URL.createObjectURL(new Blob(['blob-bytes'])); true")
+            invoke(browser.endpoint, "download", "--selector", "#blob", str(root / "blob-copy.txt"), "--tab", new, "--timeout", "3000")
+            assert (root / "blob-copy.txt").read_text() == "blob-bytes"
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                with subprocess.Popen([EXE, "--endpoint", browser.endpoint, "wait", "false", "--tab", new], stdout=subprocess.PIPE) as client:
+                    time.sleep(0.1)
+                    client.send_signal(sig)
+                    client.communicate(timeout=5)
+                    assert client.returncode != 0
+                assert browser.process.poll() is None
+                assert evaluate("6*7") == 42
+            started = time.monotonic()
+            timed = invoke(browser.endpoint, "eval", "new Promise(()=>{})", "--tab", new, "--timeout", "100", ok=False)
+            assert timed["err"] in ("Timeout", "CommandTimeout")
+            assert timed["error"]["action"] == "possibly_dispatched"
+            assert time.monotonic() - started < 2
+            assert evaluate("6*7") == 42
+            invoke(browser.endpoint, "close")
+            assert browser.process.poll() is None
+            invoke(browser.endpoint, "close-tab", "--tab", new)
+            after = {tab["id"]: tab["url"] for tab in invoke(browser.endpoint, "tabs")["result"]}
+            assert after == original, (before, after)
+            assert (browser.profile / "keep").read_text() == "external-owner"
+            print("External HTTP/WebSocket browser attachment, downloads, tab isolation, deadlines and signals: passed", flush=True)
+        finally:
+            fixture.shutdown()
+            thread.join(timeout=5)
 
 
 def main():
@@ -373,6 +492,7 @@ def main():
             exercise_agent_commands(server, root)
             command(server.path, "close")
             server.done()
+        exercise_endpoint(root)
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             with Session(root / f"signal-{sig}") as server:

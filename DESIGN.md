@@ -119,3 +119,13 @@ navigation, screenshot bytes, uploads/downloads, errors, isolation, bounded
 framing, session collisions, and cleanup through close/signals/idle expiry.
 Run relevant checks in Debug and ReleaseSafe. Existing consumers remain intact;
 their migration and acceptance are separate work.
+
+## External browser connections
+
+`agent.Connection` separates socket ownership from `journey.Browser` process
+ownership. The CLI's `--endpoint` mode executes one command without a session
+server and requires an explicit target for page operations. Discovery and the
+command share an overall cancellation budget. Ordinary attachment configures
+only the page events needed by commands; it preserves metrics, default download
+settings, network policy and unrelated targets. Explicit download capture has
+scoped interception and bounded output. Disconnect releases sockets only.

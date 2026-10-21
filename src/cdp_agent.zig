@@ -26,6 +26,72 @@ pub const Diagnostics = struct {
     action: enum { not_started, possibly_dispatched, completed } = .not_started,
 };
 
+/// Owns only CDP connections. Disconnect never closes tabs, contexts, profiles
+/// or the external browser process.
+pub const Connection = struct {
+    a: A,
+    io: std.Io,
+    client: cdp.CdpClient,
+    socket: cdp.WsSession,
+    disconnected: bool = false,
+
+    pub fn connect(a: A, io: std.Io, endpoint: []const u8) !Connection {
+        const uri = std.Uri.parse(endpoint) catch return error.InvalidEndpoint;
+        if (uri.user != null or uri.password != null or uri.query != null or uri.fragment != null) return error.InvalidEndpoint;
+        const host = try (uri.host orelse return error.InvalidEndpoint).toRawMaybeAlloc(a);
+        if (!oneOf(host, &.{ "127.0.0.1", "localhost" })) return error.InvalidEndpoint;
+        const path = try uri.path.toRawMaybeAlloc(a);
+        if (std.mem.indexOfAny(u8, path, " \r\n") != null) return error.InvalidEndpoint;
+        const port = uri.port orelse 80;
+        if (port == 0) return error.InvalidEndpoint;
+        const client = cdp.CdpClient.init(a, io, port);
+        var socket = if (std.mem.eql(u8, uri.scheme, "http")) blk: {
+            if (path.len != 0 and !std.mem.eql(u8, path, "/")) return error.InvalidEndpoint;
+            break :blk try client.connectBrowser();
+        } else if (std.mem.eql(u8, uri.scheme, "ws")) blk: {
+            if (!std.mem.startsWith(u8, path, "/devtools/browser/")) return error.InvalidEndpoint;
+            break :blk try client.connectWs(path);
+        } else return error.InvalidEndpoint;
+        socket.event_handler = discardEvent;
+        socket.event_context = a.ptr;
+        return .{ .a = a, .io = io, .client = client, .socket = socket };
+    }
+
+    pub fn disconnect(self: *Connection) void {
+        if (self.disconnected) return;
+        self.disconnected = true;
+        self.socket.close();
+    }
+
+    pub fn tabs(self: *Connection) !Value {
+        const targets = J.field(try call(self.a, &self.socket, "Target.getTargets", .{}), "targetInfos");
+        if (targets != .array) return error.InvalidProtocolReply;
+        var result: std.ArrayList(Value) = .empty;
+        for (targets.array.items) |target| {
+            if (!std.mem.eql(u8, J.str(J.field(target, "type")), "page")) continue;
+            if (result.items.len >= 2048) return error.TabLimitExceeded;
+            try result.append(self.a, try J.val(self.a, .{ .id = J.field(target, "targetId"), .title = J.field(target, "title"), .url = J.field(target, "url") }));
+        }
+        return J.val(self.a, result.items);
+    }
+
+    pub fn page(self: *Connection, id: []const u8) !cdp.WsSession {
+        const targets = try self.tabs();
+        for (targets.array.items) |target| {
+            if (!std.mem.eql(u8, id, J.str(J.field(target, "id")))) continue;
+            var socket = try self.client.connectWs(try self.a.print("/devtools/page/{s}", .{id}));
+            errdefer socket.close();
+            socket.event_handler = discardEvent;
+            socket.event_context = self.a.ptr;
+            _ = try call(self.a, &socket, "Page.enable", .{});
+            return socket;
+        }
+        return error.TabNotFound;
+    }
+
+    fn discardEvent(_: *anyopaque, _: *cdp.WsSession, _: []const u8) !void {}
+};
+
 pub const Page = struct {
     a: A,
     io: std.Io,
@@ -334,6 +400,49 @@ pub const Page = struct {
         self.diagnostics.action = .completed;
     }
 
+    /// Capture an explicit download without changing browser/context download
+    /// directories. HTTP attachments use this session's temporary Fetch domain;
+    /// blob/data downloads retain Chrome's normal behavior and copy their bytes.
+    pub fn download(self: *Page, query: Query, output: []const u8) !Value {
+        var capture: Download = .{ .page = self };
+        const old_handler = self.socket.event_handler;
+        const old_context = self.socket.event_context;
+        self.socket.event_handler = Download.event;
+        self.socket.event_context = &capture;
+        defer {
+            const protection = self.io.swapCancelProtection(.blocked);
+            defer _ = self.io.swapCancelProtection(protection);
+            const old_deadline = self.socket.deadline_ms;
+            self.socket.deadline_ms = now(self.io) + 200;
+            if (!self.socket.failed) _ = self.command("Fetch.disable", .{}) catch {};
+            self.socket.deadline_ms = old_deadline;
+            self.socket.event_handler = old_handler;
+            self.socket.event_context = old_context;
+        }
+        _ = try self.command("Fetch.enable", .{ .patterns = .{.{ .urlPattern = "*", .requestStage = "Response" }} });
+        try self.click(query);
+        while (now(self.io) < self.deadline_ms) {
+            if (capture.failure) |err| return err;
+            if (capture.bytes) |bytes| {
+                self.diagnostics.phase = .output;
+                try writeFile(self.io, output, bytes);
+                return J.val(self.a, .{ .filename = capture.filename, .path = output, .bytes = bytes.len });
+            }
+            if (std.mem.startsWith(u8, capture.url, "blob:") or std.mem.startsWith(u8, capture.url, "data:")) {
+                const value = try self.eval(try self.a.print(
+                    "(async()=>{{const r=await fetch({s});const b=new Uint8Array(await r.arrayBuffer());if(b.length>20971520)return {{too_large:true}};let s='';for(let i=0;i<b.length;i+=8192)s+=String.fromCharCode(...b.subarray(i,i+8192));return {{body:btoa(s)}}}})()",
+                    .{try J.json(self.a, capture.url)},
+                ));
+                if (J.boolean(J.field(value, "too_large"))) return error.DownloadTooLarge;
+                capture.bytes = try decode(self.a, J.str(J.field(value, "body")), true);
+                continue;
+            }
+            _ = try self.eval("0");
+            try self.pause();
+        }
+        return error.DownloadTimeout;
+    }
+
     pub fn screenshot(self: *Page, output: []const u8, full_page: bool) !Value {
         self.diagnostics.phase = .inspect;
         const result = if (full_page) blk: {
@@ -354,6 +463,62 @@ pub const Page = struct {
         return J.val(self.a, .{ .path = output, .bytes = size, .full_page = full_page });
     }
 };
+
+const Download = struct {
+    page: *Page,
+    bytes: ?[]const u8 = null,
+    filename: []const u8 = "download",
+    url: []const u8 = "",
+    failure: ?anyerror = null,
+
+    fn event(context: *anyopaque, _: *cdp.WsSession, raw: []const u8) !void {
+        const self: *Download = @ptrCast(@alignCast(context));
+        const event_value = try J.parse(self.page.a, raw);
+        const method = J.str(J.field(event_value, "method"));
+        const params = J.field(event_value, "params");
+        if (std.mem.eql(u8, method, "Page.downloadWillBegin")) {
+            self.url = J.str(J.field(params, "url"));
+            self.filename = J.str(J.field(params, "suggestedFilename"));
+        }
+        if (!std.mem.eql(u8, method, "Fetch.requestPaused")) return;
+        const id = J.str(J.field(params, "requestId"));
+        var attachment = false;
+        var content_length: usize = 0;
+        const headers = J.field(params, "responseHeaders");
+        if (headers == .array) for (headers.array.items) |header| {
+            if (std.ascii.eqlIgnoreCase(J.str(J.field(header, "name")), "Content-Disposition")) {
+                const value = J.str(J.field(header, "value"));
+                attachment = std.ascii.startsWithIgnoreCase(value, "attachment");
+                if (std.mem.indexOf(u8, value, "filename=")) |start|
+                    self.filename = std.mem.trim(u8, value[start + 9 ..], " \"");
+            }
+            if (std.ascii.eqlIgnoreCase(J.str(J.field(header, "name")), "Content-Length")) {
+                content_length = std.fmt.parseInt(usize, J.str(J.field(header, "value")), 10) catch 0;
+            }
+        };
+        if (!attachment or self.bytes != null) {
+            _ = try self.page.command("Fetch.continueRequest", .{ .requestId = id });
+            return;
+        }
+        if (content_length > 20 * 1024 * 1024) self.failure = error.DownloadTooLarge;
+        if (self.failure == null) {
+            const body = try self.page.command("Fetch.getResponseBody", .{ .requestId = id });
+            self.bytes = decode(self.page.a, J.str(J.field(body, "body")), J.boolean(J.field(body, "base64Encoded"))) catch |err| blk: {
+                self.failure = err;
+                break :blk null;
+            };
+        }
+        _ = try self.page.command("Fetch.failRequest", .{ .requestId = id, .errorReason = "Aborted" });
+    }
+};
+
+fn decode(a: A, bytes: []const u8, base64: bool) ![]const u8 {
+    const size = if (base64) try std.base64.standard.Decoder.calcSizeForSlice(bytes) else bytes.len;
+    if (size > 20 * 1024 * 1024) return error.DownloadTooLarge;
+    const output = try a.alloc(u8, size);
+    if (base64) try std.base64.standard.Decoder.decode(output, bytes) else @memcpy(output, bytes);
+    return output;
+}
 
 pub fn call(a: A, socket: *cdp.WsSession, method: []const u8, params: anytype) !Value {
     if (socket.deadline_ms) |end| if (now(socket.io) >= end) return error.Timeout;

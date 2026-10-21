@@ -188,6 +188,46 @@ pub fn failure(a: A, input: Request, err: anyerror, diagnostics: Agent.Diagnosti
     return J.json(a, .{ .ok = false, .err = @errorName(err), .command = input.command, .tab = input.tab, .@"error" = .{ .code = @errorName(err), .phase = diagnostics.phase, .match_count = diagnostics.match_count, .action = diagnostics.action } });
 }
 
+pub fn executePage(page: *Agent.Page, input: Request) !V {
+    const op = try operation(input);
+    const query: Agent.Query = input.locator orelse .{ .selector = if (input.args.len > 0) input.args[0] else "body" };
+    const index: usize = if (input.locator == null) 1 else 0;
+    switch (op) {
+        .snapshot => return page.snapshot(input.limit),
+        .read => return page.read(input.locator, input.limit),
+        .text => return page.text(query),
+        .click => page.click(query) catch |err| {
+            if (!input.modern and (err == error.ElementDisabled or err == error.ElementCovered or err == error.ElementNotVisible)) return error.ElementNotActionable;
+            return err;
+        },
+        .fill => try page.fill(query, input.args[index]),
+        .select => try page.select(query, input.args[index]),
+        .press => try page.press(input.locator, input.args[0]),
+        .wait => if (input.locator == null) try page.waitExpression(input.args[0]) else try page.wait(query, input.state),
+        .upload => try page.upload(query, input.args[index]),
+        .screenshot => {
+            const result = try page.screenshot(input.args[0], input.full_page);
+            return if (input.modern) result else .{ .string = input.args[0] };
+        },
+        .open => {
+            const url = J.str(try page.eval(try page.a.print("new URL({s}).href", .{try J.json(page.a, input.args[0])})));
+            try page.goto(url);
+            return .{ .string = J.str(try page.eval("location.href")) };
+        },
+        .reload => try page.reload(),
+        .content => try page.content(input.args[0]),
+        .eval => {
+            page.diagnostics.phase = .action;
+            page.diagnostics.action = .possibly_dispatched;
+            const result = try page.eval(input.args[0]);
+            page.diagnostics.action = .completed;
+            return result;
+        },
+        else => return error.InvalidEndpointCommand,
+    }
+    return .{ .bool = true };
+}
+
 const State = struct {
     browser: *J.Browser,
     context: []const u8,

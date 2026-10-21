@@ -34,6 +34,25 @@ if `zig-out/bin/zig-cdp` is missing. Run `zig-out/bin/zig-cdp --help` to discove
 the available commands. After rebuilding, start a new `serve` process to use new
 commands; an already-running owner keeps its original executable code.
 
+### Use an existing browser
+
+If Chrome already exposes a loopback debugging endpoint, no session owner is
+needed. List its tabs, record a target ID, then address that tab explicitly:
+
+```sh
+"$cdp_bin" --endpoint http://127.0.0.1:9239 tabs
+"$cdp_bin" --endpoint http://127.0.0.1:9239 snapshot --tab "$tab_id"
+"$cdp_bin" --endpoint http://127.0.0.1:9239 fill --tab "$tab_id" --role textbox --name Name --value Sample
+"$cdp_bin" --endpoint http://127.0.0.1:9239 click --tab "$tab_id" --role button --name Save
+"$cdp_bin" --endpoint http://127.0.0.1:9239 read --tab "$tab_id"
+```
+
+A browser WebSocket URL also works. Each command disconnects when finished;
+`close` only disconnects. The browser, profile, viewport and unrelated tabs stay
+in place. `close-tab` explicitly closes a target. Attachment uses the browser's
+normal network policy. See the [attachment guide](docs/cli.md#existing-browser-attachment)
+for downloads and ownership details.
+
 ### Start and retain a session
 
 Record three absolute paths in your task state:
