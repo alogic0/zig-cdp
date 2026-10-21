@@ -24,6 +24,9 @@ Hosted diagnostics still showed a 900×700 native window with the preceding
 1100-pixel viewport. CI now requests an owned Openbox window manager inside
 Xvfb through `-Dheaded-window-manager=true`; local bare-Xvfb checks remain
 available. The window manager is terminated and joined after the test.
+The headed fixture also renders actual responsive content, requires document
+focus and brings the page forward after each native resize; it does not measure
+an idle blank document. Its existing geometry assertions remain intact.
 
 A later hosted external-browser fixture observed an empty DevToolsActivePort
 file between creation and its record write. The fixture now polls for a valid
