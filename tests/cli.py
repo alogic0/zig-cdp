@@ -231,8 +231,22 @@ def exercise_tabs(server, origin, root):
 
 class Fixture(http.server.BaseHTTPRequestHandler):
     background_seen = threading.Event()
+    download_closed = threading.Event()
 
     def do_GET(self):
+        if self.path in ("/slow-download", "/large-download"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", 'attachment; filename="stream.bin"')
+            self.send_header("Content-Length", str(21 * 1024 * 1024 if self.path == "/large-download" else 1024 * 1024))
+            self.end_headers()
+            try:
+                for _ in range(256):
+                    self.wfile.write(b"x" * 4096)
+                    time.sleep(0.02)
+            except (BrokenPipeError, ConnectionResetError):
+                self.download_closed.set()
+            return
         if self.path == "/background":
             self.background_seen.set()
         body = b'<!doctype html><title>Fixture</title><p id="message">Local page</p>'
@@ -301,6 +315,9 @@ def exercise_agent_commands(server, root, endpoint=None, tab=None, download_url=
     assert invoke("text", "--role", "textbox", "--name", "Editor")["result"] == "from-file"
     invoke("press", "--role", "textbox", "--name", "Editor", "--key", "Control+a")
     invoke("press", "--key", "Backspace")
+    invoke("press", "--key", "Shift+a")
+    assert invoke("text", "--role", "textbox", "--name", "Editor")["result"] == "A"
+    invoke("press", "--key", "Backspace")
     assert invoke("eval", "document.querySelector('[contenteditable]').textContent")["result"] == ""
     invoke("select", "--role", "combobox", "--name", "Choice", "--value", "b")
     assert invoke("eval", "document.querySelector('select').value")["result"] == "b"
@@ -311,6 +328,12 @@ def exercise_agent_commands(server, root, endpoint=None, tab=None, download_url=
     assert invoke("click", "--role", "button", "--name", "Missing", "--timeout", "100", ok=False)["err"] == "ElementNotFound"
     assert invoke("click", "--role", "button", "--name", "Disabled", "--timeout", "100", ok=False)["err"] == "ElementDisabled"
     assert invoke("click", "--selector", "#covered", "--timeout", "100", ok=False)["err"] == "ElementCovered"
+    invoke("eval", "document.body.insertAdjacentHTML('beforeend', `<input id=readonly readonly><input id=invisible hidden><style>@keyframes motion {from{left:0px} to{left:500px}}</style><button id=moving style='position:fixed;top:300px;z-index:9999;animation:motion 1s linear infinite'>Moving</button>`); true")
+    assert invoke("fill", "--selector", "#readonly", "--value", "x", ok=False)["err"] == "ElementReadOnly"
+    assert invoke("fill", "--selector", "#invisible", "--value", "x", ok=False)["err"] == "ElementNotVisible"
+    moving = invoke("click", "--selector", "#moving", "--timeout", "350", ok=False)
+    assert moving["err"] == "ElementNotStable" and moving["error"]["action"] == "not_started", moving
+    invoke("eval", "document.querySelector('#moving').remove(); true")
     invoke("wait", "--selector", "#hidden", "--state", "hidden")
     invoke("wait", "--selector", "#missing", "--state", "detached")
     invoke("wait", "--selector", "#name", "--state", "visible")
@@ -362,6 +385,9 @@ def exercise_endpoint(root):
             new = invoke(browser.endpoint, "new-tab", origin)["result"]["id"]
             def evaluate(expression):
                 return invoke(browser.endpoint, "eval", expression, "--tab", new)["result"]
+            assert invoke(browser.endpoint, "open", origin + "/", "--tab", new)["result"] == origin + "/"
+            assert invoke(browser.endpoint, "reload", "--tab", new)["ok"]
+            assert evaluate("document.title") == "Fixture"
             geometry = evaluate("({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})")
             exercise_agent_commands(browser, root, endpoint=browser.endpoint, tab=new, download_url=origin + "/download")
             assert evaluate("({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})") == geometry
@@ -395,6 +421,128 @@ def exercise_endpoint(root):
         finally:
             fixture.shutdown()
             thread.join(timeout=5)
+
+
+def exercise_resources(root):
+    with Session(root / "resources") as server:
+        def request(cmd, *args, **options):
+            return raw_request(server.path, (json.dumps({"command": cmd, "args": args, **options}) + "\n").encode())
+
+        def usage():
+            proc = Path(f"/proc/{server.process.pid}")
+            rss = next(line for line in (proc / "status").read_text().splitlines() if line.startswith("VmRSS:"))
+            return int(rss.split()[1]), len(list((proc / "fd").iterdir()))
+
+        assert request("content", "<button>Save</button><p>" + "resource fixture " * 2000 + "</p>")["ok"]
+        for _ in range(12):
+            assert request("snapshot")["ok"]
+            assert request("eval", "'x'.repeat(512*1024)")["ok"]
+        before = usage()
+        for _ in range(3):
+            for _ in range(80):
+                assert request("snapshot")["ok"]
+                assert request("read")["ok"]
+                assert request("eval", "'x'.repeat(512*1024)")["ok"]
+            for _ in range(12):
+                tab = request("new-tab")["result"]["id"]
+                assert request("content", "<input aria-label='Name'>", tab=tab)["ok"]
+                assert request("close-tab", tab)["ok"]
+        after = usage()
+        assert after[0] - before[0] < 32 * 1024, ("owner RSS growth KiB", before, after)
+        assert after[1] <= before[1] + 3, ("owner descriptor growth", before, after)
+        # Downloads outside the explicit download command cannot accumulate in
+        # the owned workspace. Explicit downloads remove their staging files.
+        assert request("content", "<a id='d' download='a.txt' href='data:text/plain,owned'>Download</a>")["ok"]
+        for i in range(5):
+            assert request("download", "#d", str(root / f"resource-{i}.txt"))["ok"]
+            assert (root / f"resource-{i}.txt").read_text() == "owned"
+            assert not list((Path(server.ready["profile"]) / "downloads").iterdir())
+        assert request("click", "#d")["ok"]
+        time.sleep(0.1)
+        assert not list((Path(server.ready["profile"]) / "downloads").iterdir())
+        for i in range(128):
+            assert request("allow", f"http://site-{i}.invalid")["ok"]
+        limit = request("allow", "http://overflow.invalid")
+        assert limit["err"] == "OriginLimitExceeded", limit
+        oversized = request("eval", "'x'.repeat(17*1024*1024)", timeout_ms=5000)
+        assert oversized["error"]["phase"] == "output", oversized
+        assert oversized["error"]["action"] == "completed", oversized
+        assert request("eval", "42")["result"] == 42
+        bad = subprocess.run([EXE, "--session", str(server.path), "click", "--role", "button", "--text", "Save"], capture_output=True, text=True)
+        failure = json.loads(bad.stdout)
+        assert failure["error"]["phase"] == "validate" and failure["command"] == "click", failure
+        assert request("close")["ok"]
+        server.done()
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fixture) as fixture:
+        thread = threading.Thread(target=fixture.serve_forever, daemon=True)
+        thread.start()
+        try:
+            origin = f"http://127.0.0.1:{fixture.server_port}"
+            with Session(root / "download-cancellation", "--allow", origin) as server:
+                for path, budget, code in (("slow-download", "400", "DownloadTimeout"), ("large-download", "3000", "DownloadTooLarge")):
+                    Fixture.download_closed.clear()
+                    command(server.path, "content", f"<a id='stream' download href='{origin}/{path}'>Download</a>")
+                    assert command(server.path, "download", "#stream", str(root / "stream.bin"), "--timeout", budget, ok=False) == code
+                    assert Fixture.download_closed.wait(timeout=2), "download kept receiving after capture failed"
+                    assert not list((Path(server.ready["profile"]) / "downloads").iterdir())
+                    assert command(server.path, "eval", "42") == 42
+                command(server.path, "close")
+                server.done()
+        finally:
+            fixture.shutdown()
+            thread.join(timeout=5)
+    with Session(root / "browser-exit") as server:
+        with subprocess.Popen([EXE, "--session", str(server.path), "wait", "false", "--timeout", "1000"], stdout=subprocess.PIPE) as pending:
+            time.sleep(0.1)
+            os.kill(server.ready["pid"], signal.SIGKILL)
+            output, _ = pending.communicate(timeout=3)
+            failure = json.loads(output)
+            assert not failure["ok"] and failure["error"]["action"] == "not_started", failure
+        command(server.path, "close")
+        server.done()
+    print(f"Repeated inspection/tab cycles: RSS {before[0]} -> {after[0]} KiB; FDs {before[1]} -> {after[1]}; bounded downloads/origins and browser exit: passed", flush=True)
+
+
+def exercise_discovery_failures():
+    class Discovery(http.server.BaseHTTPRequestHandler):
+        mode = "status"
+        release = threading.Event()
+
+        def do_GET(self):
+            if self.mode == "hang":
+                self.release.wait(timeout=3)
+                return
+            if self.mode == "upgrade" and self.path.startswith("/devtools/"):
+                self.send_response(101)
+                self.send_header("Sec-WebSocket-Accept", "invalid")
+                self.end_headers()
+                return
+            body = json.dumps({"webSocketDebuggerUrl": f"ws://127.0.0.1:{self.server.server_port}/devtools/browser/test"}).encode() if self.mode == "upgrade" else b"[]"
+            self.send_response(500 if self.mode == "status" else 200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Discovery) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for mode, code in (("status", "InvalidDiscoveryResponse"), ("json", "InvalidProtocolReply"), ("upgrade", "WebSocketUpgradeFailed"), ("hang", "CommandTimeout")):
+                Discovery.mode = mode
+                start = time.monotonic()
+                result = subprocess.run([EXE, "--endpoint", f"http://127.0.0.1:{server.server_port}", "tabs", "--timeout", "100"], capture_output=True, text=True, timeout=3)
+                failure = json.loads(result.stdout)
+                assert result.returncode != 0 and failure["err"] == code, failure
+                assert failure["error"]["phase"] == "connect", failure
+                assert time.monotonic() - start < 1.5
+        finally:
+            Discovery.release.set()
+            server.shutdown()
+            thread.join(timeout=5)
+    print("Malformed discovery/upgrade replies and stalled discovery deadlines: passed", flush=True)
 
 
 def main():
@@ -493,6 +641,8 @@ def main():
             command(server.path, "close")
             server.done()
         exercise_endpoint(root)
+        exercise_resources(root)
+        exercise_discovery_failures()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             with Session(root / f"signal-{sig}") as server:

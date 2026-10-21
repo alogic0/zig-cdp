@@ -245,8 +245,11 @@ what they contain.
 
 The transport allows one command per connection, at most 1 MiB of request JSON
 and 16 MiB of response JSON. The server allows five seconds to receive a complete
-request; clients allow 180 seconds for a reply. Page waits default to 30 seconds,
-and individual CDP socket reads have their own 30-second timeout. Commands run
+request; clients allow 180 seconds for a reply. Commands default to 30 seconds,
+with `--timeout MS` overriding the budget (1..120000). Owned sessions can change
+their default with `timeout MS`. Discovery, tab operations and nested CDP calls
+share the budget. Final RPC reads allow 100 ms of grace, object cleanup up to
+200 ms, and whole-command cancellation a 300 ms grace before joining work. Commands run
 serially. The CLI is intended for trusted clients under the same user account.
 
 ## Session lifecycle
@@ -274,11 +277,20 @@ reusing its directory. SIGKILL or machine failure cannot run cleanup. Inspect
 stale directories and the PID/profile from the prior readiness record yourself;
 the CLI never deletes pre-existing session directories automatically.
 
-Browser observations and values stay in an arena for the session's lifetime.
-Close and restart between long workflows; this version is intended for finite
-automation sessions rather than an indefinite browser daemon. The owner services
-events for all attached tabs between commands so background requests can finish
-while idle.
+Results and inspection data are reclaimed after each command. Closed tab
+connections release their storage. The owner retains at most 64 controlled tabs
+and 128 allowed origins; exceeding these yields `TabLimitExceeded` or
+`OriginLimitExceeded`. It services origin-policy events between commands without
+retaining network bodies or exception histories. Journey library observation
+APIs keep their separate arena-based contract.
+
+Owned sessions allow downloads only during an explicit `download` command and
+remove private staging files afterward. Capture retains at most 256 download
+events/2 MiB and reads at most 20 MiB of output. Attached download capture bounds
+its event stream to 4,096 events/8 MiB and leaves Chrome's default directory
+unchanged. Temporary request memory is still proportional to a bounded CDP frame
+(up to 64 MiB) and is released on completion. Repeated-workflow tests measure the
+owner process; these limits do not bound Chrome's own page/application memory.
 Headless automation and cleanup have finite test coverage. Automated Xvfb checks
 cover native viewport resizing in default and isolated contexts. One X11
 saved-profile window was also checked manually. These checks do not establish

@@ -1,7 +1,7 @@
 # zig-cdp
 
-Native Chrome DevTools Protocol automation for Zig, with an owned browser API
-and a command-line wrapper. Linux, Zig **0.17.0**, and an installed Chrome or
+Native Chrome DevTools Protocol automation for Zig, with owned browser sessions,
+existing-browser connections and a command-line interface. Linux, Zig **0.17.0**, and an installed Chrome or
 Chromium are required. The compiler version is pinned in `.zigversion`.
 
 The reusable `cdp` module has no GUI framework dependency. Browser process
@@ -9,7 +9,7 @@ ownership comes from [`zig-process`](https://github.com/alogic0/zig-process),
 downloaded automatically at a pinned revision and verified by its package hash.
 Node.js and a browser-driver service are not required.
 
-Version **0.1.0**, licensed under the [MIT License](LICENSE).
+Version **0.2.0**, licensed under the [MIT License](LICENSE).
 
 ## Install
 

@@ -2,7 +2,13 @@
 
 Date: 2026-10-21
 
-Status: implementation in progress
+Status: implemented (2026-10-21)
+
+Delivery: inspection and interactions in `4ab0c81`; external attachment in
+`6e90c40`; resource bounds, deadline/error completion and final workflow
+verification complete the delivery in version 0.2.0. See
+[CURRENT_STATUS.md](../../CURRENT_STATUS.md) for finite verification evidence.
+Frame/shadow-root support, batching and MCP remain deferred as planned.
 
 The goal should be: **an agent can inspect a page, identify a control, act, and
 verify the result using short commands, with clear browser ownership.**

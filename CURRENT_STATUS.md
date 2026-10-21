@@ -1,5 +1,47 @@
 # Current delivery
 
+## Agent usability plan completed, October 21, 2026
+
+Version 0.2.0 implements all six stages of the saved
+[agent usability plan](docs/plans/2026-10-21-agent-usability.md): bounded read and
+Chrome accessibility snapshots, strict semantic locators, interaction commands,
+short-lived attachment to existing browsers, structured command diagnostics and
+shared timeout budgets, reclaimable session storage, and real-browser workflows
+in both ownership modes. Existing positional commands remain accepted.
+
+The CLI retains at most 64 controlled pages and 128 origins. Inspection/results
+expire per request; detached pages release their arenas. CLI policy events do
+not retain network bodies or exception histories. Explicit downloads have
+bounded event/output capture and owned staging cleanup. Journey library callers
+retain their existing observation defaults and can allocate individual tab
+connections separately. Browser process/signal ownership remains unchanged.
+
+The resource regression runs 720 inspection/evaluation commands and 36 tab
+cycles after warmup, checks owner RSS growth below 32 MiB and stable descriptor
+counts, verifies repeated download staging cleanup and origin limits, and kills
+its own test browser during a pending command. The final CLI runs measured
+8,168 to 8,260 KiB RSS in Debug and 3,344 to 3,372 KiB in ReleaseSafe, with seven
+descriptors throughout. This bounds tested owner behavior, not
+Chrome's application memory or indefinite process lifetime.
+
+Verification used the pinned Zig 0.17.0 and Chrome 155.0.8059.84:
+
+| Check | Debug | ReleaseSafe |
+| --- | --- | --- |
+| `test test-cli check example install test-headed` | 15/15 build steps; 10/10 library tests; 1/1 headed test | Same |
+| Independent package consumer | 1/1 passed | 1/1 passed |
+| CLI workflows | Owned and external browsers passed | Same |
+| Resource regression | 720 commands, 36 tab cycles; stable descriptors | Same |
+| Discovery faults and browser exit | Passed | Passed |
+| Format, relative documentation links, diff and private-path checks | Passed | Passed |
+
+The final CLI cases also cover moving controls, hidden/read-only inputs, shifted
+keyboard input, oversized response diagnostics, and explicit navigation/reload
+on borrowed tabs. Streaming download fixtures verify that timeout and size
+failures cancel transfers, remove staging, and leave the session usable.
+CI already runs these expanded fixtures in both profiles.
+Iframe/shadow-root traversal, batching and MCP remain deferred as planned.
+
 ## Existing-browser attachment, October 21, 2026
 
 Added loopback HTTP/browser-WebSocket endpoint commands and the public
@@ -33,7 +75,7 @@ semantic actions, disabled/covered/ambiguous controls, contenteditable and
 trusted input, hidden uploads, downloads, Unicode and output bounds. Both modes
 also pass 9/9 existing library tests and the independent consumer, which now
 uses the public agent API. Existing-profile and signal-cleanup checks pass.
-Existing-browser attachment is implemented; longer-session resource work follows next.
+Existing-browser attachment and resource/deadline completion are recorded above.
 
 ## Publication preparation, October 21, 2026
 

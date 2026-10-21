@@ -56,15 +56,17 @@ const help =
 ;
 
 pub fn main(init: std.process.Init) u8 {
-    return run(init) catch |err| {
-        const reply = J.json(init.arena.allocator(), .{ .ok = false, .err = @errorName(err) }) catch return 1;
+    var input: session.Request = .{ .command = "" };
+    var diagnostics: Agent.Diagnostics = .{};
+    return run(init, &input, &diagnostics) catch |err| {
+        const reply = session.failure(init.arena.allocator(), input, err, diagnostics) catch return 1;
         std.Io.File.stdout().writeStreamingAll(init.io, reply) catch {};
         std.Io.File.stdout().writeStreamingAll(init.io, "\n") catch {};
         return 1;
     };
 }
 
-fn run(init: std.process.Init) !u8 {
+fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diagnostics) !u8 {
     const a = init.arena.allocator();
     var iterator = std.process.Args.Iterator.init(init.minimal.args);
     _ = iterator.next();
@@ -74,7 +76,7 @@ fn run(init: std.process.Init) !u8 {
         return 0;
     }
     if (std.mem.eql(u8, first, "--version")) {
-        try std.Io.File.stdout().writeStreamingAll(init.io, "zig-cdp 0.1.0\n");
+        try std.Io.File.stdout().writeStreamingAll(init.io, "zig-cdp 0.2.0\n");
         return 0;
     }
     const borrowed = std.mem.eql(u8, first, "--endpoint");
@@ -82,6 +84,7 @@ fn run(init: std.process.Init) !u8 {
     const target = iterator.next() orelse return error.MissingSessionPath;
     const path = if (borrowed) target else try absolute(a, init.io, target);
     const command = iterator.next() orelse return error.MissingCommand;
+    input.command = command;
     if (std.mem.eql(u8, command, "serve")) {
         if (borrowed) return error.InvalidEndpointCommand;
         var options: session.Options = .{ .directory = path };
@@ -106,7 +109,7 @@ fn run(init: std.process.Init) !u8 {
         try session.serve(init.gpa, init.io, options);
         return 0;
     }
-    var input: session.Request = .{ .command = command };
+    input.* = .{ .command = command };
     var args: std.ArrayList([]const u8) = .empty;
     var output: ?[]const u8 = null;
     var literal = false;
@@ -164,7 +167,7 @@ fn run(init: std.process.Init) !u8 {
         output = null;
     }
     input.args = args.items;
-    const op = try session.operation(input);
+    const op = try session.operation(input.*);
     switch (op) {
         .screenshot => args.items[0] = try absolute(a, init.io, args.items[0]),
         .upload, .download => {
@@ -173,10 +176,16 @@ fn run(init: std.process.Init) !u8 {
         },
         else => {},
     }
-    const reply = if (borrowed) try endpoint.run(a, init.io, path, input) else try session.request(a, init.io, path, input);
+    diagnostics.phase = .connect;
+    const reply = if (borrowed) try endpoint.run(a, init.io, path, input.*) else try session.request(a, init.io, path, input.*);
     const parsed = try std.json.parseFromSlice(std.json.Value, a, reply, .{});
     defer parsed.deinit();
     if (output) |destination| if (J.boolean(J.field(parsed.value, "ok"))) {
+        diagnostics.phase = .output;
+        diagnostics.action = switch (op) {
+            .click, .fill, .select, .press, .upload, .download, .open, .reload, .content, .eval, .@"new-tab", .@"switch-tab", .@"close-tab", .close => .completed,
+            else => .not_started,
+        };
         try Agent.writeFile(init.io, destination, reply);
         try std.Io.File.stdout().writeStreamingAll(init.io, try J.json(a, .{ .ok = true, .file = destination }));
         try std.Io.File.stdout().writeStreamingAll(init.io, "\n");

@@ -35,6 +35,8 @@ pub const Connection = struct {
     socket: cdp.WsSession,
     disconnected: bool = false,
 
+    var discard_context: u8 = 0;
+
     pub fn connect(a: A, io: std.Io, endpoint: []const u8) !Connection {
         const uri = std.Uri.parse(endpoint) catch return error.InvalidEndpoint;
         if (uri.user != null or uri.password != null or uri.query != null or uri.fragment != null) return error.InvalidEndpoint;
@@ -53,7 +55,7 @@ pub const Connection = struct {
             break :blk try client.connectWs(path);
         } else return error.InvalidEndpoint;
         socket.event_handler = discardEvent;
-        socket.event_context = a.ptr;
+        socket.event_context = &discard_context;
         return .{ .a = a, .io = io, .client = client, .socket = socket };
     }
 
@@ -82,7 +84,7 @@ pub const Connection = struct {
             var socket = try self.client.connectWs(try self.a.print("/devtools/page/{s}", .{id}));
             errdefer socket.close();
             socket.event_handler = discardEvent;
-            socket.event_context = self.a.ptr;
+            socket.event_context = &discard_context;
             _ = try call(self.a, &socket, "Page.enable", .{});
             return socket;
         }
@@ -290,7 +292,11 @@ pub const Page = struct {
             view.a = scratch.allocator();
             const id = try view.resolve(query);
             defer view.release(id);
-            const info = try view.helper(id, "point", .{});
+            var info = try view.helper(id, "point", .{});
+            if (J.str(J.field(info, "reason")).len == 0) {
+                try self.pause();
+                info = try view.helper(id, "point", info);
+            }
             const reason = J.str(J.field(info, "reason"));
             if (reason.len == 0) {
                 const x = J.field(info, "x");
@@ -303,7 +309,7 @@ pub const Page = struct {
                 self.diagnostics.action = .completed;
                 return;
             }
-            blocked = if (std.mem.eql(u8, reason, "disabled")) error.ElementDisabled else if (std.mem.eql(u8, reason, "covered")) error.ElementCovered else error.ElementNotVisible;
+            blocked = if (std.mem.eql(u8, reason, "disabled")) error.ElementDisabled else if (std.mem.eql(u8, reason, "covered")) error.ElementCovered else if (std.mem.eql(u8, reason, "moving")) error.ElementNotStable else error.ElementNotVisible;
             if (now(self.io) >= self.deadline_ms) return blocked;
             self.pause() catch |err| return if (err == error.Canceled) err else blocked;
         }
@@ -312,6 +318,7 @@ pub const Page = struct {
     pub fn fill(self: *Page, query: Query, value: []const u8) !void {
         const id = try self.resolve(query);
         defer self.release(id);
+        if (!J.boolean(J.field(try self.helper(id, "info", .{}), "visible"))) return error.ElementNotVisible;
         const reason = J.str(try self.helper(id, "prepareFill", .{}));
         if (reason.len != 0) return if (std.mem.eql(u8, reason, "disabled")) error.ElementDisabled else if (std.mem.eql(u8, reason, "readonly")) error.ElementReadOnly else error.ElementNotEditable;
         self.diagnostics.phase = .action;
@@ -376,7 +383,7 @@ pub const Page = struct {
     }
 
     pub fn press(self: *Page, query: ?Query, input: []const u8) !void {
-        const key = try Key.parse(input);
+        const key = try Key.parse(self.a, input);
         if (query) |q| {
             const id = try self.resolve(q);
             defer self.release(id);
@@ -470,9 +477,14 @@ const Download = struct {
     filename: []const u8 = "download",
     url: []const u8 = "",
     failure: ?anyerror = null,
+    events: usize = 0,
+    event_bytes: usize = 0,
 
     fn event(context: *anyopaque, _: *cdp.WsSession, raw: []const u8) !void {
         const self: *Download = @ptrCast(@alignCast(context));
+        if (self.events >= 4096 or raw.len > 8 * 1024 * 1024 - self.event_bytes) return error.DownloadEventLimitExceeded;
+        self.events += 1;
+        self.event_bytes += raw.len;
         const event_value = try J.parse(self.page.a, raw);
         const method = J.str(J.field(event_value, "method"));
         const params = J.field(event_value, "params");
@@ -561,7 +573,7 @@ const Key = struct {
     modifiers: u32,
     text: []const u8,
 
-    fn parse(input: []const u8) !Key {
+    fn parse(a: A, input: []const u8) !Key {
         var parts = std.mem.splitScalar(u8, input, '+');
         var modifiers: u32 = 0;
         var value = parts.next() orelse return error.InvalidKey;
@@ -574,7 +586,11 @@ const Key = struct {
         const names = [_][]const u8{ "Enter", "Tab", "Escape", "Backspace", "Delete", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End", "PageUp", "PageDown", "Space" };
         const numbers = [_]u32{ 13, 9, 27, 8, 46, 37, 38, 39, 40, 36, 35, 33, 34, 32 };
         for (names, numbers) |name, number| if (std.mem.eql(u8, value, name)) return .{ .key = if (number == 32) " " else name, .code = name, .virtual = number, .modifiers = modifiers, .text = if (modifiers & 7 != 0) "" else if (number == 13) "\r" else if (number == 32) " " else "" };
-        if (value.len == 1 and std.ascii.isPrint(value[0])) return .{ .key = value, .code = "", .virtual = std.ascii.toUpper(value[0]), .modifiers = modifiers, .text = if (modifiers & 7 != 0) "" else value };
+        if (value.len == 1 and std.ascii.isPrint(value[0])) {
+            const character = if (modifiers & 8 != 0 and std.ascii.isAlphabetic(value[0])) try a.print("{c}", .{std.ascii.toUpper(value[0])}) else value;
+            const code = if (std.ascii.isAlphabetic(value[0])) try a.print("Key{c}", .{std.ascii.toUpper(value[0])}) else "";
+            return .{ .key = character, .code = code, .virtual = std.ascii.toUpper(value[0]), .modifiers = modifiers, .text = if (modifiers & 7 != 0) "" else character };
+        }
         return error.InvalidKey;
     }
 };

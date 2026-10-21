@@ -35,6 +35,25 @@ pub const WsSession = struct {
     deadline_ms: ?i64 = null,
     pub const max_message_bytes = 64 * 1024 * 1024;
 
+    /// Change wire storage while idle, migrating queued messages before the
+    /// old allocator is released. No call may be in flight during this move.
+    pub fn setAllocator(self: *WsSession, alloc: std.mem.Allocator) !void {
+        var pending: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (pending.items) |message| alloc.free(message);
+            pending.deinit(alloc);
+        }
+        for (self.pending.items) |message| {
+            const copy = try alloc.dupe(u8, message);
+            errdefer alloc.free(copy);
+            try pending.append(alloc, copy);
+        }
+        for (self.pending.items) |message| self.alloc.free(message);
+        self.pending.deinit(self.alloc);
+        self.pending = pending;
+        self.alloc = alloc;
+    }
+
     pub fn close(self: *WsSession) void {
         for (self.pending.items) |message| self.alloc.free(message);
         self.pending.deinit(self.alloc);
@@ -739,4 +758,20 @@ pub fn findBrowserExecutable(io: std.Io) ?[]const u8 {
         } else |_| {}
     }
     return null;
+}
+
+test "queued wire messages survive allocator replacement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var socket: WsSession = .{ .alloc = arena.allocator(), .io = std.testing.io, .stream = undefined };
+    try socket.pending.append(arena.allocator(), try arena.allocator().dupe(u8, "queued response"));
+    socket.pending_bytes = "queued response".len;
+    try socket.setAllocator(std.testing.allocator);
+    arena.deinit();
+    defer {
+        for (socket.pending.items) |message| std.testing.allocator.free(message);
+        socket.pending.deinit(std.testing.allocator);
+    }
+    try std.testing.expectEqualStrings("queued response", socket.pending.items[0]);
+    try std.testing.expectEqual(@as(usize, "queued response".len), socket.pending_bytes);
+    try socket.pending.append(std.testing.allocator, try std.testing.allocator.dupe(u8, "another response"));
 }

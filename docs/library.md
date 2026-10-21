@@ -233,3 +233,25 @@ it never issues `Browser.close` or disposes contexts. The allocator supplied to
 Connection must outlive its sockets. CLI endpoint mode supplies a deadline
 covering discovery, connection and the command; library consumers must provide
 their own cancellation/deadline policy around connection establishment.
+
+## Allocating tab connections separately
+
+`Browser.tabsWithAllocator(a, context)` places listing results in `a`.
+`newTabWithAllocator(a, context, origins)` and
+`attachTabWithAllocator(a, id, context, origins)` place the Page, socket and
+initialization data in `a`. Target/context IDs are copied. Detach the connection
+before destroying that allocator; the browser and its shared context remain
+alive. The existing methods continue using `Browser.a`.
+
+Journey observations retain their finite arena contract by default. Consumers
+that use only agent commands may set `browser.capture_observations = false`
+before creating pages, disabling retained network/exception data. Set
+`browser.configure_downloads = false` to leave download policy to the caller.
+The CLI uses these mechanisms, denies automatic downloads as CLI policy, and
+captures requested downloads in bounded request storage. Library callers keep responsibility for origin slices, command
+cancellation, serialization and browser lifecycle.
+
+`WsSession.setAllocator(a)` migrates queued wire messages to a reclaiming
+allocator while the socket is idle. Do not assign `socket.alloc` directly after
+calls: even an empty queue may retain capacity owned by the original allocator.
+No CDP call may be active during the migration.

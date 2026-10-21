@@ -67,11 +67,17 @@ read time, and idle duration. Commands run serially. Broken browser connections
 require a new session; ordinary locator or evaluation errors can be corrected.
 The same owner services events for every attached page between commands. Accept
 results retain their resource owner even when arrival races a timer or shutdown.
-The session arena retains browser observations until session exit; this first
-version is for finite automation sessions, not indefinite daemon workloads.
+Command results and inspection data use request arenas. Each dynamically
+attached page has a separate arena, reclaimed on detachment. CLI pages retain no
+journey network/exception observations; their origin-policy events use temporary
+storage. The journey API retains its existing arena-based observation defaults.
+The CLI bounds controlled pages to 64 and allowed origins to 128. Download events
+use command storage capped at 256 events/2 MiB; captured output is at most 20 MiB.
+Owned sessions deny downloads outside an explicit download command and clean
+private staging after capture. External attachment retains Chrome's policy.
 
 Supported operations cover status, origins, navigation, reload, setting fixture
-HTML, JavaScript evaluation, CSS-based click/fill/text/wait/upload/download,
+HTML, JavaScript evaluation, strict CSS/role/name/text inspection and actions,
 screenshots, tab management, and close. File paths resolve in the client's
 working directory.
 Origins are explicit CLI policy and may be extended during a session. Workflow
@@ -105,7 +111,9 @@ commands remain accepted. Errors retain `err` and add structured phase,
 match-count and action-progress details. Progress describes dispatch, not
 application-level success; consumers verify the effect of an action.
 
-All frames in an operation share an absolute read deadline. Locator polling
+Discovery, topology changes and nested page operations share the command's
+absolute budget. A cancellation race joins command work before reading its
+diagnostics or freeing storage. All frames in an operation share an absolute read deadline. Locator polling
 allows at most 100 ms for the last in-flight RPC to finish before abandoning
 the connection; remote-object cleanup has a separate 200 ms allowance. A
 transport failure seals the connection, while ordinary locator errors do not.

@@ -24,5 +24,12 @@ test "independent consumer launches and evaluates" {
     var borrowed = try connection.page(page.target);
     borrowed.close();
     connection.disconnect();
+    var tab_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    const tab = try browser.newTabWithAllocator(tab_arena.allocator(), page.context, &.{});
+    const target = try arena.allocator().dupe(u8, tab.target);
+    try std.testing.expect((try browser.tabsWithAllocator(arena.allocator(), page.context)).len == 2);
+    tab.detach();
+    tab_arena.deinit();
+    try browser.closeTab(target);
     try std.testing.expectEqual(@as(i64, 42), J.number(try page.eval("42")));
 }

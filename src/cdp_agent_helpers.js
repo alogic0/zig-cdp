@@ -13,16 +13,17 @@
       readonly: !!this.readOnly
     };
   },
-  point() {
+  point(previous) {
     if (this.matches(':disabled') || this.closest('[aria-disabled="true"],[inert]')) return {reason:'disabled'};
     this.scrollIntoView({block:'center', inline:'center'});
     const r = this.getBoundingClientRect(), style = getComputedStyle(this);
+    if (previous?.bounds && ['x','y','width','height'].some(key => Math.abs(previous.bounds[key]-r[key]) > 0.5)) return {reason:'moving'};
     if (!this.isConnected || !r.width || !r.height || style.visibility !== 'visible' || style.display === 'none') return {reason:'hidden'};
     const left=Math.max(0,r.left), right=Math.min(innerWidth,r.right);
     const top=Math.max(0,r.top), bottom=Math.min(innerHeight,r.bottom);
     if (left>=right || top>=bottom) return {reason:'hidden'};
     const x=(left+right)/2, y=(top+bottom)/2, hit=document.elementFromPoint(x,y);
-    return hit && (hit===this || this.contains(hit)) ? {x,y} : {reason:'covered'};
+    return hit && (hit===this || this.contains(hit)) ? {x,y,bounds:{x:r.x,y:r.y,width:r.width,height:r.height}} : {reason:'covered'};
   },
   prepareFill() {
     if (this.matches(':disabled') || this.closest('[aria-disabled="true"],[inert]')) return 'disabled';

@@ -60,6 +60,13 @@ pub const Browser = struct {
     downloads_dir: []const u8,
     downloads: std.ArrayList(V) = .empty,
     version: []const u8,
+    /// CLI commands disable journey observations and capture downloads only
+    /// within a request arena. Library defaults retain finite observations.
+    capture_observations: bool = true,
+    /// Skip automatic download configuration; the caller supplies its policy.
+    configure_downloads: bool = true,
+    download_allocator: ?A = null,
+    download_bytes: usize = 0,
 
     pub const Options = struct {
         executable: ?[]const u8 = null,
@@ -172,9 +179,14 @@ pub const Browser = struct {
     }
     fn onEvent(ctx: *anyopaque, _: *cdp.WsSession, raw: []const u8) anyerror!void {
         const self: *Browser = @ptrCast(@alignCast(ctx));
-        const v = try parse(self.a, raw);
+        const a = self.download_allocator orelse if (self.capture_observations) self.a else return;
+        if (self.downloads.items.len >= 256 or raw.len > 2 * 1024 * 1024 - self.download_bytes) return error.DownloadEventLimitExceeded;
+        const v = try parse(a, raw);
         const method = str(field(v, "method"));
-        if (std.mem.startsWith(u8, method, "Browser.download")) try self.downloads.append(self.a, v);
+        if (std.mem.startsWith(u8, method, "Browser.download")) {
+            self.download_bytes += raw.len;
+            try self.downloads.append(a, v);
+        }
     }
     pub fn page(self: *Browser, origins: []const []const u8) !*Page {
         const context = str(field(try self.command("Target.createBrowserContext", .{}), "browserContextId"));
@@ -206,8 +218,12 @@ pub const Browser = struct {
     /// List page targets in one context. An empty context selects the profile's
     /// default context; Chrome's internal UI and workers are excluded.
     pub fn tabs(self: *Browser, context: []const u8) ![]const Tab {
-        const contexts = if (context.len == 0) field(try self.command("Target.getBrowserContexts", .{}), "browserContextIds") else .null;
-        const targets = field(try self.command("Target.getTargets", .{}), "targetInfos");
+        return self.tabsWithAllocator(self.a, context);
+    }
+    /// Result storage is scoped to a caller allocator, independently of Browser.
+    pub fn tabsWithAllocator(self: *Browser, a: A, context: []const u8) ![]const Tab {
+        const contexts = if (context.len == 0) field(try commandValue(a, &self.socket, "Target.getBrowserContexts", .{}), "browserContextIds") else .null;
+        const targets = field(try commandValue(a, &self.socket, "Target.getTargets", .{}), "targetInfos");
         var result: std.ArrayList(Tab) = .empty;
         if (targets == .array) for (targets.array.items) |target| {
             if (!std.mem.eql(u8, str(field(target, "type")), "page")) continue;
@@ -221,25 +237,33 @@ pub const Browser = struct {
                 };
                 if (isolated) continue;
             }
-            try result.append(self.a, .{ .id = str(field(target, "targetId")), .title = str(field(target, "title")), .url = str(field(target, "url")) });
+            try result.append(a, .{ .id = str(field(target, "targetId")), .title = str(field(target, "title")), .url = str(field(target, "url")) });
         };
-        return result.toOwnedSlice(self.a);
+        return result.toOwnedSlice(a);
     }
     /// Create a blank tab sharing the specified context. The page connection
     /// does not own/dispose that context. Navigate after interception is ready.
     pub fn newTab(self: *Browser, context: []const u8, origins: []const []const u8) !*Page {
+        return self.newTabWithAllocator(self.a, context, origins);
+    }
+    /// The page and its connection borrow a; detach before destroying it.
+    pub fn newTabWithAllocator(self: *Browser, a: A, context: []const u8, origins: []const []const u8) !*Page {
         const result = if (context.len == 0)
-            try self.command("Target.createTarget", .{ .url = "about:blank", .newWindow = false })
+            try commandValue(a, &self.socket, "Target.createTarget", .{ .url = "about:blank", .newWindow = false })
         else
-            try self.command("Target.createTarget", .{ .url = "about:blank", .browserContextId = context, .newWindow = false });
+            try commandValue(a, &self.socket, "Target.createTarget", .{ .url = "about:blank", .browserContextId = context, .newWindow = false });
         const id = str(field(result, "targetId"));
-        errdefer self.closeTab(id) catch {};
-        return self.connectPage(id, context, origins, false);
+        errdefer _ = commandValue(a, &self.socket, "Target.closeTarget", .{ .targetId = id }) catch {};
+        return self.connectPageWithAllocator(a, id, context, origins, false);
     }
     /// Attach to an existing page in the specified context without navigation.
     pub fn attachTab(self: *Browser, id: []const u8, context: []const u8, origins: []const []const u8) !*Page {
-        for (try self.tabs(context)) |tab| {
-            if (std.mem.eql(u8, tab.id, id)) return self.connectPage(tab.id, context, origins, false);
+        return self.attachTabWithAllocator(self.a, id, context, origins);
+    }
+    /// The page and its connection borrow a; detach before destroying it.
+    pub fn attachTabWithAllocator(self: *Browser, a: A, id: []const u8, context: []const u8, origins: []const []const u8) !*Page {
+        for (try self.tabsWithAllocator(a, context)) |tab| {
+            if (std.mem.eql(u8, tab.id, id)) return self.connectPageWithAllocator(a, tab.id, context, origins, false);
         }
         return error.TabNotFound;
     }
@@ -249,23 +273,27 @@ pub const Browser = struct {
         if (!boolean(field(try self.command("Target.closeTarget", .{ .targetId = id }), "success"))) return error.TabNotFound;
     }
     fn connectPage(self: *Browser, id: []const u8, context: []const u8, origins: []const []const u8, owns_context: bool) !*Page {
-        const ws = try self.a.print("/devtools/page/{s}", .{id});
-        var socket = try self.client.connectWs(ws);
+        return self.connectPageWithAllocator(self.a, id, context, origins, owns_context);
+    }
+    fn connectPageWithAllocator(self: *Browser, a: A, id: []const u8, context: []const u8, origins: []const []const u8, owns_context: bool) !*Page {
+        if (id.len == 0 or id.len > 128 or std.mem.indexOfAny(u8, id, "/?# \r\n") != null) return error.InvalidProtocolReply;
+        const ws = try a.print("/devtools/page/{s}", .{id});
+        var socket = try cdp.CdpClient.init(a, self.io, self.client.port).connectWs(ws);
         errdefer socket.close();
-        const p = try self.a.create(Page);
-        p.* = .{ .browser = self, .a = self.a, .io = self.io, .socket = socket, .context = context, .owns_context = owns_context, .target = id, .origins = origins };
+        const p = try a.create(Page);
+        p.* = .{ .browser = self, .a = a, .io = self.io, .socket = socket, .context = try a.dupe(u8, context), .owns_context = owns_context, .target = try a.dupe(u8, id), .origins = origins };
         p.socket.event_context = p;
         p.socket.event_handler = Page.onEvent;
         _ = try p.command("Page.enable", .{});
         _ = try p.command("Runtime.enable", .{});
-        _ = try p.command("Network.enable", .{ .maxTotalBufferSize = 64 * 1024 * 1024, .maxResourceBufferSize = 20 * 1024 * 1024, .maxPostDataSize = 1024 * 1024, .enableDurableMessages = true });
+        if (self.capture_observations) _ = try p.command("Network.enable", .{ .maxTotalBufferSize = 64 * 1024 * 1024, .maxResourceBufferSize = 20 * 1024 * 1024, .maxPostDataSize = 1024 * 1024, .enableDurableMessages = true });
         _ = try p.command("Fetch.enable", .{ .patterns = .{.{ .urlPattern = "*", .requestStage = "Request" }} });
         if (self.headless)
             _ = try p.command("Emulation.setDeviceMetricsOverride", .{ .width = 1280, .height = 720, .deviceScaleFactor = 1, .mobile = false });
-        if (context.len == 0) {
-            _ = try self.command("Browser.setDownloadBehavior", .{ .behavior = "allowAndName", .downloadPath = self.downloads_dir, .eventsEnabled = true });
-        } else {
-            _ = try self.command("Browser.setDownloadBehavior", .{ .behavior = "allowAndName", .browserContextId = context, .downloadPath = self.downloads_dir, .eventsEnabled = true });
+        if (self.configure_downloads and context.len == 0) {
+            _ = try commandValue(a, &self.socket, "Browser.setDownloadBehavior", .{ .behavior = "allowAndName", .downloadPath = self.downloads_dir, .eventsEnabled = true });
+        } else if (self.configure_downloads) {
+            _ = try commandValue(a, &self.socket, "Browser.setDownloadBehavior", .{ .behavior = "allowAndName", .browserContextId = context, .downloadPath = self.downloads_dir, .eventsEnabled = true });
         }
         try p.initScript(@embedFile("cdp_locators.js"));
         _ = try p.eval(@embedFile("cdp_locators.js"));
@@ -278,7 +306,7 @@ fn commandValue(a: A, socket: *cdp.WsSession, method: []const u8, params: anytyp
     const args = if (@TypeOf(params) == @TypeOf(.{})) try a.dupe(u8, "{}") else try json(a, params);
     defer a.free(args);
     const raw = try socket.call(method, args);
-    defer a.free(raw);
+    defer socket.alloc.free(raw);
     const value = try parse(a, raw);
     if (field(value, "error") != .null) {
         if (!std.mem.eql(u8, method, "Network.getResponseBody"))
@@ -305,7 +333,7 @@ fn resolveInterception(a: A, socket: *cdp.WsSession, method: []const u8, params:
     const args = try json(a, params);
     defer a.free(args);
     const raw = try socket.call(method, args);
-    defer a.free(raw);
+    defer socket.alloc.free(raw);
     try interceptionResult(try parse(a, raw));
 }
 
@@ -493,12 +521,15 @@ pub const Page = struct {
     }
     fn onEvent(ctx: *anyopaque, _: *cdp.WsSession, raw: []const u8) anyerror!void {
         const self: *Page = @ptrCast(@alignCast(ctx));
-        const v = try parse(self.a, raw);
+        var scratch = std.heap.ArenaAllocator.init(self.socket.alloc);
+        defer scratch.deinit();
+        const a = if (self.browser.capture_observations) self.a else scratch.allocator();
+        const v = try parse(a, raw);
         const method = str(field(v, "method"));
         const p = field(v, "params");
         if (std.mem.eql(u8, method, "Page.javascriptDialogOpening")) {
             const accepted_unload = self.allow_unload and std.mem.eql(u8, str(field(p, "type")), "beforeunload");
-            _ = try self.command("Page.handleJavaScriptDialog", .{ .accept = accepted_unload });
+            _ = try commandValue(a, &self.socket, "Page.handleJavaScriptDialog", .{ .accept = accepted_unload });
             if (!accepted_unload) return error.UnexpectedBrowserDialog;
         } else if (std.mem.eql(u8, method, "Fetch.requestPaused")) {
             const url_value = str(field(field(p, "request"), "url"));
@@ -506,7 +537,9 @@ pub const Page = struct {
             for (self.origins) |origin| {
                 if (std.mem.startsWith(u8, url_value, origin) and (url_value.len == origin.len or url_value[origin.len] == '/')) allowed = true;
             }
-            if (allowed) try resolveInterception(self.a, &self.socket, "Fetch.continueRequest", .{ .requestId = str(field(p, "requestId")) }) else try resolveInterception(self.a, &self.socket, "Fetch.failRequest", .{ .requestId = str(field(p, "requestId")), .errorReason = "BlockedByClient" });
+            if (allowed) try resolveInterception(a, &self.socket, "Fetch.continueRequest", .{ .requestId = str(field(p, "requestId")) }) else try resolveInterception(a, &self.socket, "Fetch.failRequest", .{ .requestId = str(field(p, "requestId")), .errorReason = "BlockedByClient" });
+        } else if (!self.browser.capture_observations) {
+            return;
         } else if (std.mem.eql(u8, method, "Network.requestWillBeSent")) {
             if (self.requests.items.len >= 20000) return error.RequestLimitExceeded;
             const request = field(p, "request");
