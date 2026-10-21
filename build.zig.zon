@@ -3,11 +3,19 @@
     .version = "0.2.0",
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
+        .http_fixture = .{
+            .url = "file:vendor/zig-http-fixture-b51873725fecd7936078e64026b6ea664783773e.tar.gz",
+            .hash = "http_fixture-0.2.1-FEx3WHtDAQAw_rDcdJV2y3jHnhkNv4dpO4s4sxccS1sh",
+        },
+        .test_support = .{
+            .url = "file:vendor/zig-test-support-e23cb642765677807c2e80f613fb873f9780554a.tar.gz",
+            .hash = "test_support-0.1.0-WfGxyoRFAQDhhlTotTZ_-3SC6mWmQZIvxFQBcFXQm5NI",
+        },
         .process = .{
             .url = "git+https://github.com/alogic0/zig-process.git#4826a4973b20b65ded5f0fb79d5eb49694024398",
             .hash = "process-0.5.1-BnTYqEE4AgB9ILj1BL2rdfggzRIWzFNVP7lO_MFvVZl8",
         },
     },
-    .paths = .{ "build.zig", "build.zig.zon", ".zigversion", "src", "tests", "examples", "docs", "LICENSE", "README.md", "DESIGN.md", "CURRENT_STATUS.md", "AGENTS.md" },
+    .paths = .{ "build.zig", "build.zig.zon", ".zigversion", "src", "tests", "examples", "docs", "vendor", "LICENSE", "README.md", "DESIGN.md", "CURRENT_STATUS.md", "AGENTS.md" },
     .fingerprint = 0x59f610c6ec197bfc,
 }

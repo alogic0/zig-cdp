@@ -49,6 +49,23 @@ pub fn build(b: *std.Build) void {
     cli_tests.addFileArg(b.path("tests/cli.py"));
     cli_tests.addArtifactArg(cli);
     b.step("test-cli", "Run CLI session acceptance tests (requires Python 3)").dependOn(&cli_tests.step);
+    const native_cli_tests = b.addExecutable(.{
+        .name = "cli-acceptance",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/cli.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "test_support", .module = b.dependency("test_support", .{ .target = target, .optimize = optimize }).module("test_support") },
+                .{ .name = "http_fixture", .module = b.dependency("http_fixture", .{ .target = target, .optimize = optimize }).module("http_fixture") },
+            },
+        }),
+    });
+    const native_run = b.addRunArtifact(native_cli_tests);
+    native_run.addArtifactArg(cli);
+    native_run.addPassthruArgs();
+    native_run.has_side_effects = true;
+    b.step("test-cli-native", "Run native CLI subprocess acceptance").dependOn(&native_run.step);
     const headed_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/cdp_headed_test.zig"),
         .target = target,
