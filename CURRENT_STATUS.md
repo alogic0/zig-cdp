@@ -1,5 +1,39 @@
 # Current delivery
 
+## Publication preparation, October 21, 2026
+
+Version 0.1.0 now carries an MIT license credited to zig-cdp developers.
+The package includes the license and fetches zig-process from public GitHub
+revision `4826a4973b20b65ded5f0fb79d5eb49694024398`, pinned by content hash.
+Installation and library integration guides use `alogic0/zig-cdp`; a sibling
+process repository is no longer required. Generated dependency directories are
+ignored alongside build caches.
+
+GitHub Actions covers Ubuntu Debug and ReleaseSafe with the pinned compiler,
+Chrome, Python 3, and Xvfb. Checkout and toolchain setup actions use exact
+release commits, read-only repository permissions, and separate matrix cache
+keys. Pushes, pull requests, and manual dispatch run the same checks.
+
+Verification used an isolated source export without a sibling checkout and an
+initially empty global Zig cache, with Chrome 155.0.8059.84:
+
+| Check | Result |
+| --- | --- |
+| `zig build test check example install`, both profiles | 9/9 library tests, example and CLI build; 10/10 steps each |
+| `zig build test-cli`, both profiles | Full CLI acceptance suite passed; 3/3 steps each |
+| `zig build test-headed`, both profiles | 1/1 headed regression; 3/3 steps each |
+| `zig build test` in `tests/package`, both profiles | 1/1 consumer test; 3/3 steps each |
+| Workflow lint | actionlint 1.7.12 passed |
+| Package export | 22 files, including LICENSE; build caches and Git metadata excluded |
+| Formatting, relative documentation links, and diff checks | Passed |
+
+The six original commits and all stored historical blobs were scanned for
+obvious credentials, private absolute paths, and local-file links; none were
+found. These are local publication checks; the first GitHub-hosted CI run follows
+publication of the repository.
+
+## Initial delivery
+
 Initial standalone extraction and command-line wrapper, October 20, 2026.
 
 Acceptance scope:

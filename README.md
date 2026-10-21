@@ -5,9 +5,25 @@ and a command-line wrapper. Linux, Zig **0.17.0**, and an installed Chrome or
 Chromium are required. The compiler version is pinned in `.zigversion`.
 
 The reusable `cdp` module has no GUI framework dependency. Browser process
-ownership comes from the sibling [`zig-process`](../zig-process) package.
-Keep both repositories under the same parent directory for the supplied local
-path dependency. Node.js and a browser-driver service are not required.
+ownership comes from [`zig-process`](https://github.com/alogic0/zig-process),
+downloaded automatically at a pinned revision and verified by its package hash.
+Node.js and a browser-driver service are not required.
+
+Version **0.1.0**, licensed under the [MIT License](LICENSE).
+
+## Install
+
+With Zig 0.17.0 and Chrome or Chromium installed:
+
+```sh
+git clone https://github.com/alogic0/zig-cdp.git
+cd zig-cdp
+zig build -Doptimize=ReleaseSafe
+./zig-out/bin/zig-cdp --version
+```
+
+The executable is `zig-out/bin/zig-cdp`. For library use, see the
+[package integration guide](docs/library.md#package-integration).
 
 ## For agents
 
@@ -208,6 +224,11 @@ The CLI acceptance tests use Python 3's standard library. The library and CLI
 have no Python runtime dependency. `test-headed` requires `xvfb-run` and tests
 window resizing on a separate virtual X display. The independent package check
 runs with `zig build test` from `tests/package` in either optimization profile.
+
+GitHub Actions runs library, CLI, example, package, and headed Xvfb checks on
+Ubuntu in Debug and ReleaseSafe with the compiler pinned in `.zigversion`.
+It also checks Zig formatting. The workflow runs on pushes and pull requests
+and supports manual dispatch.
 
 The compiler uses `-O debug` and `-O safe` for direct compiler invocations;
 `zig build` uses `-Doptimize=Debug` and `-Doptimize=ReleaseSafe`.

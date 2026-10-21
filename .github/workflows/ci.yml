@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Linux (${{ matrix.optimize }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        optimize: [Debug, ReleaseSafe]
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read pinned Zig version
+        id: zig-version
+        run: echo "version=$(cat .zigversion)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ steps.zig-version.outputs.version }}
+          cache-key: ${{ matrix.optimize }}
+
+      - name: Verify compiler and browser
+        run: |
+          test "$(zig version)" = "$(cat .zigversion)"
+          google-chrome --version
+          python3 --version
+
+      - name: Install virtual display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends xvfb xauth
+
+      - name: Check Zig formatting
+        if: matrix.optimize == 'Debug'
+        run: zig fmt --check build.zig build.zig.zon src tests examples
+
+      - name: Test library, run example, and build CLI
+        run: zig build test check example install -Doptimize=${{ matrix.optimize }} --summary all
+
+      - name: Test CLI sessions
+        run: zig build test-cli -Doptimize=${{ matrix.optimize }} --summary all
+
+      - name: Test headed browser on Xvfb
+        run: zig build test-headed -Doptimize=${{ matrix.optimize }} --summary all
+
+      - name: Test package consumer
+        working-directory: tests/package
+        run: zig build test -Doptimize=${{ matrix.optimize }} --summary all

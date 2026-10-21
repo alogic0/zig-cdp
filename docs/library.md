@@ -6,7 +6,15 @@ The [complete example](../examples/smoke.zig) runs without a web server.
 
 ## Package integration
 
-Add a local path dependency to your package's `build.zig.zon`:
+From your consuming package, fetch the public repository:
+
+```sh
+zig fetch --save=zig_cdp 'git+https://github.com/alogic0/zig-cdp.git#main'
+```
+
+Zig resolves the branch to a specific revision and records its package hash in
+`build.zig.zon`. Commit that manifest to retain the selected dependency.
+For local development, a path dependency is also supported:
 
 ```zig
 .dependencies = .{
@@ -24,8 +32,9 @@ const browser = b.dependency("zig_cdp", .{
 exe.root_module.addImport("cdp", browser.module("cdp"));
 ```
 
-The dependency uses the sibling `zig-process` repository. Both packages use the
-compiler pinned in `.zigversion`; the module honors the requested optimization.
+The package fetches its pinned `zig-process` dependency automatically. Both
+packages use the compiler pinned in `.zigversion`; the module honors the
+requested optimization.
 
 ## Launch and cleanup
 
