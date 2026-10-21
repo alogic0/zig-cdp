@@ -37,13 +37,22 @@ const External = struct {
         }
         errdefer H.printLog(c, log_path);
         const active = try c.a.print("{s}/DevToolsActivePort", .{profile});
-        try H.S.readiness.file(c.io, .{ .path = active, .timeout_ms = 10000, .child = &child });
-        const data = try H.S.files.read(c.a, c.io, .{ .path = active, .limit = 4096 });
-        var lines = std.mem.splitScalar(u8, data, '\n');
-        const port = try std.fmt.parseInt(u16, lines.next() orelse return error.InvalidEndpoint, 10);
-        const path = lines.next() orelse return error.InvalidEndpoint;
-        try H.check(port > 0 and std.mem.startsWith(u8, path, "/devtools/browser/"), "external endpoint advertised by owned Chrome");
-        return .{ .c = c, .profile = profile, .endpoint = try c.a.print("http://127.0.0.1:{d}", .{port}), .websocket = try c.a.print("ws://127.0.0.1:{d}{s}", .{ port, path }), .child = child, .log = log };
+        const deadline = H.Io.Clock.awake.now(c.io).addDuration(.fromSeconds(10));
+        while (H.Io.Clock.awake.now(c.io).nanoseconds < deadline.nanoseconds) {
+            if (try child.poll() != null) return error.BrowserExitedBeforeReady;
+            try c.io.sleep(.fromMilliseconds(10), .awake);
+            // Creation precedes the record write. Existence alone is not readiness.
+            const data = H.S.files.read(c.a, c.io, .{ .path = active, .limit = 4096 }) catch |err| {
+                if (err == error.FileNotFound) continue;
+                return err;
+            };
+            var lines = std.mem.splitScalar(u8, data, '\n');
+            const port = std.fmt.parseInt(u16, lines.next() orelse continue, 10) catch continue;
+            const path = lines.next() orelse continue;
+            if (port == 0 or path.len <= "/devtools/browser/".len or !std.mem.startsWith(u8, path, "/devtools/browser/")) continue;
+            return .{ .c = c, .profile = profile, .endpoint = try c.a.print("http://127.0.0.1:{d}", .{port}), .websocket = try c.a.print("ws://127.0.0.1:{d}{s}", .{ port, path }), .child = child, .log = log };
+        }
+        return error.BrowserReadinessTimeout;
     }
     fn deinit(self: *External) void {
         _ = self.child.stop(10000) catch |err| std.debug.print("External fixture cleanup: {s}\n", .{@errorName(err)});

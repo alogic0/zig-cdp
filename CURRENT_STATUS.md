@@ -25,6 +25,11 @@ Hosted diagnostics still showed a 900×700 native window with the preceding
 Xvfb through `-Dheaded-window-manager=true`; local bare-Xvfb checks remain
 available. The window manager is terminated and joined after the test.
 
+A later hosted external-browser fixture observed an empty DevToolsActivePort
+file between creation and its record write. The fixture now polls for a valid
+port and browser path while retaining its exact child and the original ten-second
+budget. Focused endpoint acceptance passes both profiles with one CPU.
+
 CI also tests the exact bundled HTTP 0.2.1 and support 0.1.0 archives in both
 profiles, including examples and isolated consumers with empty package caches.
 All four provider jobs passed the first hosted run; its two CLI failures are
