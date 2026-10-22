@@ -13,6 +13,15 @@ consumer pass Debug and ReleaseSafe; Debug library tests and ReleaseSafe
 endpoint acceptance pass. Remaining slices are tracked in the
 [workflow parity plan](docs/plans/2026-10-22-browser-workflow-parity.md).
 
+Slice 2 delivers the independent finite observer with readiness, private
+versioned JSONL captures, bounded console/exception/network metadata and exact
+method/URL response-body filters. Debug and ReleaseSafe observation acceptance
+passes against owned and externally owned Chrome: readiness before actions,
+correlation, reload, rejection/redirect/failure, download coexistence, quiet
+expiry, size/event overflow, oversized bodies, SIGINT/SIGTERM, real write
+failure, tab closure and browser exit. Capture teardown preserves other browser
+state. No global journey observation or origin-policy changes.
+
 ## Low-core session scheduling, October 21, 2026
 
 The first hosted CLI checks exposed a timeout on the initial session `status`

@@ -26,6 +26,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "discovery", .run = @import("cli_faults.zig").run },
         .{ .name = "endpoint", .run = @import("cli_endpoint.zig").run },
         .{ .name = "resources", .run = @import("cli_resources.zig").run },
+        .{ .name = "observe", .run = @import("cli_observe.zig").run },
         .{ .name = "focus", .run = @import("cli_focus.zig").run },
     };
     var completed: usize = 0;

@@ -2,14 +2,14 @@ const std = @import("std");
 const H = @import("cli_support.zig");
 const Fixture = @import("cli_fixture.zig").Fixture;
 /// Chrome belongs to this fixture. The CLI only borrows its advertised endpoint.
-const External = struct {
+pub const External = struct {
     c: H.Context,
     profile: []const u8,
     endpoint: []const u8,
     websocket: []const u8,
     child: H.P.Child,
     log: H.Io.File,
-    fn start(c: H.Context) !External {
+    pub fn start(c: H.Context) !External {
         const profile = try c.path("external-profile");
         const downloads = try c.path("external-downloads");
         try c.dir(try c.a.print("{s}/Default", .{profile}));
@@ -54,7 +54,7 @@ const External = struct {
         }
         return error.BrowserReadinessTimeout;
     }
-    fn deinit(self: *External) void {
+    pub fn deinit(self: *External) void {
         _ = self.child.stop(10000) catch |err| std.debug.print("External fixture cleanup: {s}\n", .{@errorName(err)});
         self.child.deinit();
         self.log.close(self.c.io);

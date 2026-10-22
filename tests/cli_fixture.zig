@@ -52,6 +52,9 @@ pub const Fixture = struct {
             };
             return;
         }
+        if (std.mem.startsWith(u8, target, "/api/save")) return input.response.send(.{ .body = "{\"saved\":true,\"id\":42}", .headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });
+        if (H.eql(u8, target, "/api/reject")) return input.response.send(.{ .body = "{\"saved\":false}", .status = .bad_request, .headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });
+        if (H.eql(u8, target, "/redirect")) return input.response.send(.{ .body = "", .status = .found, .headers = &.{.{ .name = "Location", .value = "/api/save?secret=redirect" }} });
         if (H.eql(u8, target, "/background")) self.background.store(true, .release);
         if (H.eql(u8, target, "/download")) return input.response.send(.{ .body = "agent-download", .headers = &.{ .{ .name = "Content-Type", .value = "application/octet-stream" }, .{ .name = "Content-Disposition", .value = "attachment; filename=\"agent.txt\"" } } });
         try input.response.send(.{ .body = "<!doctype html><title>Fixture</title><p id=\"message\">Local page</p>", .headers = &.{.{ .name = "Content-Type", .value = "text/html" }} });

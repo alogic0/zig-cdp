@@ -350,3 +350,62 @@ native window sizing under Xvfb.
 
 See the [scenario map](plans/2026-10-21-native-cli-migration.md) for the preserved
 reference coverage and parity evidence.
+
+## Observation across commands
+
+Start `observe` in a retained foreground process, read its stdout readiness
+record (`ok:true, ready:true`), then issue actions from separate processes:
+
+```sh
+zig-cdp --endpoint "$endpoint" observe --tab "$tab_id" \
+  --events console,exceptions,network --duration 30000 --out "$capture" \
+  --body-method POST --body-url 'https://example.test/api/save'
+# After readiness, from another shell/tool invocation:
+zig-cdp --endpoint "$endpoint" click --tab "$tab_id" --role button --name Save
+```
+
+The same syntax works with `--session PATH`. An explicit tab is required; the
+owner resolves it once and the observer borrows an independent connection.
+Observation does not occupy the owner's command loop, install interception,
+change download paths, replay requests or acquire browser ownership. Workers
+and separate frame targets are outside this capture scope. Existing owner
+origin restrictions remain active.
+
+`--out` must name a new file, created with mode 0600. It contains JSON Lines,
+version 1, with `tab`, increasing `seq`, Unix `observed_ms`, `kind`, and `data`.
+Kinds include console, exception, request, response, redirect, finished, failed,
+and body. Network records correlate `request_id` and redirect `hop`; request and
+response records include frame/loader IDs when available. CDP timestamps retain
+their original units (network seconds, Runtime milliseconds). Console records
+include bounded argument descriptions and the first source location; objects
+are not recursively expanded. Metadata omits headers, credentials, query,
+fragment and payloads. Console/exception text itself may contain secrets.
+
+Both `--body-method` (uppercase) and `--body-url` (exact full HTTP(S) URL,
+including query) are required for body capture. Matching is done before URL
+redaction. Bodies are retrieved after completion, never by repeating the
+request. A body record reports `complete`, `unavailable`, `oversized`, or
+`binary`; only complete UTF-8 text is emitted. Chrome can evict a body before
+retrieval. Downloads can be observed but do not promise readable response bodies.
+
+Limits (options may lower these ceilings):
+
+| Option | Default | Ceiling |
+| --- | --- | --- |
+| `--duration` milliseconds | 30000 | 120000 |
+| `--max-events` output records | 4096 | 4096 |
+| `--max-bytes` capture bytes | 8388608 | 8388608 |
+| `--body-limit` decoded body bytes | 1048576 | 1048576 |
+
+At most 4096 active requests are retained. Individual incoming events are
+limited to 2 MiB; metadata output records to 64 KiB. Console text is limited to
+4096 bytes and 32 arguments. The transport's existing 64 MiB frame bound also
+applies. Per-round-trip storage is reclaimed; this does not bound Chrome's
+application memory. There is a six-second startup allowance around the finite
+capture duration. Expiry is successful completion; interrupted/disconnected,
+failed output, overflow, truncated text or unavailable requested bodies produce
+a nonzero result. Limits stop capture rather than silently dropping an unlimited
+stream. Stdout ends with a summary containing `reason`, record/byte counts,
+`dropped`, `truncated`, and `unavailable_bodies`. This readiness + summary stream
+is the exception to the ordinary one-result stdout contract. SIGINT/SIGTERM
+release only observer sockets and preserve the browser and partial file.

@@ -59,6 +59,9 @@ browser behind your current window. In owned sessions, `switch-tab ID
 --background` changes CLI selection only. Unqualified tab creation/switching
 still requests foreground activation. Ordinary attachment and recovery do not.
 
+Observe across separate action commands with `observe --tab ID --out NEW_PATH`.
+Wait for its readiness record before acting. See [capture options and bounds](docs/cli.md#observation-across-commands), including exact method/URL response-body filters.
+
 ### Start and retain a session
 
 Record three absolute paths in your task state:

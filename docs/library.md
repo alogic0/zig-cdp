@@ -261,3 +261,7 @@ cancellation, serialization and browser lifecycle.
 allocator while the socket is idle. Do not assign `socket.alloc` directly after
 calls: even an empty queue may retain capacity owned by the original allocator.
 No CDP call may be active during the migration.
+
+The CLI `observe` command borrows a separate `agent.Connection`; it does not
+enable journey observation retention or add signal handlers to the library.
+Its capture schema and lifetime are documented in [the CLI guide](cli.md#observation-across-commands).

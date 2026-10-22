@@ -2,6 +2,7 @@ const std = @import("std");
 const session = @import("cli_session.zig");
 const J = @import("cdp").journey;
 const Agent = @import("cdp").agent;
+const observe = @import("cli_observe.zig");
 const endpoint = @import("cli_endpoint.zig");
 
 const help =
@@ -33,6 +34,11 @@ const help =
     \\screenshot PATH                  Write a PNG
     \\upload CSS PATH                  Set one file input
     \\download CSS PATH                Click and save a completed download
+    \\observe --tab ID --out NEW_PATH  Independent finite capture; wait for readiness
+    \\  --events console,exceptions,network --duration MS (default 30000; max 120000)
+    \\  --body-method METHOD --body-url EXACT_URL (optional matched response text)
+    \\  --max-events N (4096), --max-bytes N (8388608), --body-limit N (1048576)
+    \\  Limits above are ceilings; stdout emits readiness and a final summary.
     \\close                            Stop the owned browser and server
     \\
     \\LOCATOR: --selector CSS | --role ROLE [--name NAME] | --text TEXT
@@ -108,6 +114,17 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
         options.origins = origins.items;
         try session.serve(init.gpa, init.io, options);
         return 0;
+    }
+    if (std.mem.eql(u8, command, "observe")) {
+        var options: observe.Options = .{};
+        var seen: std.StringHashMap(void) = .init(a);
+        while (iterator.next()) |option| {
+            if (seen.contains(option)) return error.InvalidOption;
+            try seen.put(option, {});
+            const value = iterator.next() orelse return error.MissingOptionValue;
+            if (std.mem.eql(u8, option, "--tab")) options.tab = value else if (std.mem.eql(u8, option, "--out")) options.out = try absolute(a, init.io, value) else if (std.mem.eql(u8, option, "--events")) options.events = value else if (std.mem.eql(u8, option, "--duration")) options.duration = std.fmt.parseInt(u32, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--max-events")) options.max_events = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--max-bytes")) options.max_bytes = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--body-limit")) options.body_limit = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--body-url")) options.body_url = value else if (std.mem.eql(u8, option, "--body-method")) options.body_method = value else return error.UnknownOption;
+        }
+        return observe.run(a, init.gpa, init.io, path, borrowed, options);
     }
     input.* = .{ .command = command };
     var args: std.ArrayList([]const u8) = .empty;

@@ -148,3 +148,9 @@ command share an overall cancellation budget. Ordinary attachment configures
 only the page events needed by commands; it preserves metrics, default download
 settings, network policy and unrelated targets. Explicit download capture has
 scoped interception and bounded output. Disconnect releases sockets only.
+
+The CLI observer resolves an explicit target and owns only an independent
+connection and a finite private capture file. It never occupies the session
+command loop or composes with its Fetch handler. Network and Runtime domains
+are enabled only on that observer connection; disconnection releases them.
+Request metadata, frames, output and duration have separate limits.
