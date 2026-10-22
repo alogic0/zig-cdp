@@ -719,9 +719,9 @@ pub fn request(a: A, io: std.Io, directory: []const u8, input: Request) ![]const
 fn writeLine(io: std.Io, stream: Stream, bytes: []const u8) !void {
     var buffer: [4096]u8 = undefined;
     var writer = stream.writer(io, &buffer);
-    try writer.interface.writeAll(bytes);
-    try writer.interface.writeByte('\n');
-    try writer.interface.flush();
+    writer.interface.writeAll(bytes) catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
+    writer.interface.writeByte('\n') catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
+    writer.interface.flush() catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
 }
 
 fn readLine(a: A, io: std.Io, stream: Stream, options: struct { limit: usize, timeout_ms: i64 }) ![]const u8 {

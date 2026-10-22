@@ -1,5 +1,22 @@
 # Current delivery
 
+## Frames, shadows, workers and shutdown, October 22, 2026
+
+The [new plan](docs/plans/2026-10-22-frames-shadows-workers.md) is in progress.
+Shutdown investigation reproduced a cancellation-propagation defect: the
+standard stream writer stores Canceled but returns WriteFailed, which the idle
+session pump treats as an ordinary browser fault and swallows. This can prevent
+the canceled server task from joining after a signal, matching the earlier log.
+WebSocket, discovery/upgrade and CLI reply I/O now preserve cancellation while
+retaining existing non-cancellation error codes. A deterministic injected write
+test failed before the fix and passes afterward.
+
+Debug and ReleaseSafe pass all thirteen library tests and eight single-CPU
+shutdown cases (suspended browsers and signals racing idle pumps). The unchanged
+ten-second shutdown gate verifies removed owned profiles/processes and survival
+of an unrelated browser. The precise timing of the original intermittent run
+was not reproduced; the swallowing defect is verified independently.
+
 ## Browser workflow parity completed (0.3.0), October 22, 2026
 
 Slice 1 adds background tab creation and owned CLI selection, passive attachment

@@ -23,6 +23,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "contract", .run = @import("cli_contract.zig").run },
         .{ .name = "agent", .run = @import("cli_agent.zig").run },
         .{ .name = "lifecycle", .run = @import("cli_lifecycle.zig").run },
+        .{ .name = "shutdown", .run = @import("cli_shutdown.zig").run },
         .{ .name = "discovery", .run = @import("cli_faults.zig").run },
         .{ .name = "endpoint", .run = @import("cli_endpoint.zig").run },
         .{ .name = "resources", .run = @import("cli_resources.zig").run },

@@ -65,35 +65,35 @@ pub const WsSession = struct {
         var w = self.stream.writer(self.io, &wb);
 
         // Byte 0: 0x81 (FIN + text frame)
-        try w.interface.writeByte(0x81);
+        w.interface.writeByte(0x81) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
 
         // Byte 1..: mask bit set (0x80)
         if (payload.len < 126) {
-            try w.interface.writeByte(0x80 | @as(u8, @intCast(payload.len)));
+            w.interface.writeByte(0x80 | @as(u8, @intCast(payload.len))) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
         } else if (payload.len <= 0xFFFF) {
-            try w.interface.writeByte(0x80 | 126);
+            w.interface.writeByte(0x80 | 126) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
             var len_bytes: [2]u8 = undefined;
             std.mem.writeInt(u16, &len_bytes, @as(u16, @intCast(payload.len)), .big);
-            try w.interface.writeAll(&len_bytes);
+            w.interface.writeAll(&len_bytes) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
         } else {
-            try w.interface.writeByte(0x80 | 127);
+            w.interface.writeByte(0x80 | 127) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
             var len_bytes: [8]u8 = undefined;
             std.mem.writeInt(u64, &len_bytes, payload.len, .big);
-            try w.interface.writeAll(&len_bytes);
+            w.interface.writeAll(&len_bytes) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
         }
 
         var mask: [4]u8 = undefined;
         self.io.random(&mask);
-        try w.interface.writeAll(&mask);
+        w.interface.writeAll(&mask) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
         var chunk: [4096]u8 = undefined;
         var offset: usize = 0;
         while (offset < payload.len) {
             const n = @min(chunk.len, payload.len - offset);
             for (chunk[0..n], 0..) |*byte, i| byte.* = payload[offset + i] ^ mask[(offset + i) % 4];
-            try w.interface.writeAll(chunk[0..n]);
+            w.interface.writeAll(chunk[0..n]) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
             offset += n;
         }
-        try w.interface.flush();
+        w.interface.flush() catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
     }
 
     fn readExact(self: *WsSession, bytes: []u8) !void {
@@ -176,10 +176,10 @@ pub const WsSession = struct {
                     var writer = self.stream.writer(self.io, &wb);
                     var mask: [4]u8 = undefined;
                     self.io.random(&mask);
-                    try writer.interface.writeAll(&.{ 0x8a, 0x80 | @as(u8, @intCast(buf.len)) });
-                    try writer.interface.writeAll(&mask);
-                    for (buf, 0..) |byte, i| try writer.interface.writeByte(byte ^ mask[i % 4]);
-                    try writer.interface.flush();
+                    writer.interface.writeAll(&.{ 0x8a, 0x80 | @as(u8, @intCast(buf.len)) }) catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
+                    writer.interface.writeAll(&mask) catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
+                    for (buf, 0..) |byte, i| writer.interface.writeByte(byte ^ mask[i % 4]) catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
+                    writer.interface.flush() catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
                 },
                 10 => {},
                 else => return error.InvalidWebSocketFrame,
@@ -569,13 +569,13 @@ pub const CdpClient = struct {
         const req = try std.fmt.allocPrint(self.alloc, "{s} {s} HTTP/1.1\r\nHost: 127.0.0.1:{d}\r\nContent-Length: 0\r\n\r\n", .{ method, path, self.port });
         defer self.alloc.free(req);
 
-        try w.interface.writeAll(req);
-        try w.interface.flush();
+        w.interface.writeAll(req) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
+        w.interface.flush() catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
 
         var header_buf: [4096]u8 = undefined;
         var header_len: usize = 0;
         while (header_len < header_buf.len) {
-            const b = try r.interface.takeByte();
+            const b = r.interface.takeByte() catch |err| return if ((r.err orelse err) == error.Canceled) error.Canceled else err;
             header_buf[header_len] = b;
             header_len += 1;
             if (header_len >= 4 and std.mem.eql(u8, header_buf[header_len - 4 .. header_len], "\r\n\r\n")) break;
@@ -598,7 +598,7 @@ pub const CdpClient = struct {
         if (content_length > 16 * 1024 * 1024) return error.DiscoveryTooLarge;
 
         const body = try self.alloc.alloc(u8, content_length);
-        try r.interface.readSliceAll(body);
+        r.interface.readSliceAll(body) catch |err| return if ((r.err orelse err) == error.Canceled) error.Canceled else err;
         return body;
     }
 
@@ -717,13 +717,13 @@ pub const CdpClient = struct {
         );
         defer self.alloc.free(handshake);
 
-        try w.interface.writeAll(handshake);
-        try w.interface.flush();
+        w.interface.writeAll(handshake) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
+        w.interface.flush() catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
 
         var header_buf: [4096]u8 = undefined;
         var header_len: usize = 0;
         while (header_len < header_buf.len) {
-            const b = try r.interface.takeByte();
+            const b = r.interface.takeByte() catch |err| return if ((r.err orelse err) == error.Canceled) error.Canceled else err;
             header_buf[header_len] = b;
             header_len += 1;
             if (header_len >= 4 and std.mem.eql(u8, header_buf[header_len - 4 .. header_len], "\r\n\r\n")) break;
@@ -822,4 +822,17 @@ test "wire reads tolerate early poll expiry without extending the deadline" {
     try std.testing.expectError(error.Timeout, socket.readExact(&byte));
     try std.testing.expectEqual(@as(usize, 2), fake.polls);
     try std.testing.expectEqual(@as(i64, 10), fake.time_ms);
+}
+
+test "canceled websocket writes preserve cancellation for their owner" {
+    const Fake = struct {
+        fn operate(_: ?*anyopaque, _: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            return error.Canceled;
+        }
+    };
+    var vtable = std.testing.io.vtable.*;
+    vtable.operate = Fake.operate;
+    var socket: WsSession = .{ .alloc = std.testing.allocator, .io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable }, .stream = undefined };
+    socket.stream.socket.handle = -1;
+    try std.testing.expectError(error.Canceled, socket.sendRaw("{}"));
 }
