@@ -1,0 +1,1 @@
+onconnect=e=>{const port=e.ports[0];port.onmessage=async e=>{await fetch('/api/save',{method:'POST'}).then(r=>r.text());console.log('shared evidence '+e.data);port.postMessage(e.data);};port.start();};

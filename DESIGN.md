@@ -187,3 +187,14 @@ resolve a fresh chain per operation/poll. AX candidates are filtered by root and
 assigned-slot membership. Input checks walk composed ancestors and test each
 retargeting boundary. Discovery walks bounded DOM descriptions, excludes
 user-agent roots and never crosses a frame's contentDocument implicitly.
+
+
+Finite observation opts into related iframe/dedicated-worker sessions and
+explicit worker IDs. One serialized reader feeds globally bounded output and
+request maps. Request identity includes the flattened session ID; correlation
+and source strings are copied before an RPC can reenter callbacks. Detached
+sessions reclaim request state and report pending matched bodies unavailable.
+Initial readiness lists configured targets; later readiness/loss is explicit.
+Auto-attach pause cleanup also resumes excluded dedicated workers, because the
+Chrome startup throttle can otherwise leave an excluded worker paused. Worker
+selection and all observer output/signal policy remain in the CLI.

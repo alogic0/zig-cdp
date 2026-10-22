@@ -201,11 +201,19 @@ pub const Page = struct {
     }
     fn frameContext(self: *Page) !*cdp.target_tree.Context {
         const tree = try self.ensureTargets();
-        if (tree.context(self.frame.?)) |ctx| return ctx;
-        const all = try tree.frames(self.a);
-        if (tree.context(self.frame.?)) |ctx| return ctx;
-        for (all.array.items) |f| if (std.mem.eql(u8, J.str(J.field(f, "id")), self.frame.?)) return error.FrameContextUnavailable;
-        return error.FrameNotFound;
+        while (true) {
+            if (tree.context(self.frame.?)) |ctx| return ctx;
+            const all = try tree.frames(self.a);
+            if (tree.context(self.frame.?)) |ctx| return ctx;
+            var exists = false;
+            for (all.array.items) |f| if (std.mem.eql(u8, J.str(J.field(f, "id")), self.frame.?)) {
+                exists = true;
+                break;
+            };
+            if (!exists) return error.FrameNotFound;
+            if (now(self.io) >= self.deadline_ms) return error.FrameContextUnavailable;
+            try self.pause();
+        }
     }
     fn rootMethod(method: []const u8) bool {
         return std.mem.startsWith(u8, method, "Input.") or std.mem.startsWith(u8, method, "Emulation.") or oneOf(method, &.{ "Page.startScreencast", "Page.stopScreencast", "Page.captureScreenshot", "Page.getLayoutMetrics" });

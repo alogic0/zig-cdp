@@ -20,7 +20,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "process", .module = process.module("process") }},
     }) });
-    b.step("test", "Run native CDP and owned-browser tests").dependOn(&b.addRunArtifact(tests).step);
+    const test_step = b.step("test", "Run native CDP and owned-browser tests");
+    test_step.dependOn(&b.addRunArtifact(tests).step);
+    const observer_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/cli_observe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "cdp", .module = cdp }},
+    }) });
+    test_step.dependOn(&b.addRunArtifact(observer_tests).step);
     const example = b.addExecutable(.{
         .name = "cdp-smoke",
         .root_module = b.createModule(.{

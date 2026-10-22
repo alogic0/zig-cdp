@@ -32,6 +32,8 @@ pub const Tree = struct {
     contexts: [256]Context = @splat(.{}),
     root: Text = .{},
     workers: bool = false,
+    include_frames: bool = true,
+    explicit_workers: []const []const u8 = &.{},
     pause_new: bool = false,
     max_targets: usize = 64,
     old_handler: ?*const fn (*anyopaque, *C.WsSession, []const u8) anyerror!void = null,
@@ -74,6 +76,9 @@ pub const Tree = struct {
             _ = self.call(a, s.id.slice(), "Runtime.runIfWaitingForDebugger", .{}) catch {};
         };
         if (!self.socket.failed) self.autoAttach(a, null, false) catch {};
+        for (&self.sessions) |*s| if (s.active and !self.socket.failed) {
+            _ = self.call(a, if (s.parent.len > 0) s.parent.slice() else null, "Target.detachFromTarget", .{ .sessionId = s.id.slice() }) catch {};
+        };
         self.socket.event_handler = self.old_handler;
         self.socket.event_context = self.old_context;
         self.installed = false;
@@ -83,7 +88,14 @@ pub const Tree = struct {
             _ = try self.call(a, sid, "Target.setAutoAttach", .{ .autoAttach = false, .waitForDebuggerOnStart = false, .flatten = true });
             return;
         }
-        _ = try self.call(a, sid, "Target.setAutoAttach", .{ .autoAttach = true, .waitForDebuggerOnStart = self.pause_new, .flatten = true, .filter = .{ .{ .type = "iframe" }, .{ .type = "worker", .exclude = !self.workers }, .{ .type = "shared_worker", .exclude = !self.workers }, .{ .type = "service_worker", .exclude = !self.workers }, .{ .exclude = true } } });
+        _ = try self.call(a, sid, "Target.setAutoAttach", .{ .autoAttach = true, .waitForDebuggerOnStart = self.pause_new, .flatten = true, .filter = .{ .{ .type = "iframe", .exclude = !self.include_frames }, .{ .type = "worker", .exclude = !self.workers and !self.pause_new }, .{ .type = "shared_worker", .exclude = true }, .{ .type = "service_worker", .exclude = true }, .{ .exclude = true } } });
+    }
+    pub fn attachWorker(self: *Tree, a: A, id: []const u8) !void {
+        if (id.len == 0 or id.len > 256) return error.InvalidWorker;
+        for (self.sessions) |s| if (s.active and eq(s.target.slice(), id)) return;
+        const info = J.field(try self.call(a, null, "Target.getTargetInfo", .{ .targetId = id }), "targetInfo");
+        if (!workerKind(J.str(J.field(info, "type")))) return error.NotWorkerTarget;
+        _ = try self.call(a, null, "Target.attachToTarget", .{ .targetId = id, .flatten = true });
     }
     pub fn call(self: *Tree, a: A, sid: ?[]const u8, method: []const u8, params: anytype) !V {
         return callSession(a, self.socket, sid, method, params);
@@ -112,6 +124,24 @@ pub const Tree = struct {
                 _ = try self.call(a, sid, "Runtime.runIfWaitingForDebugger", .{});
                 return;
             }
+            const kind = J.str(J.field(info, "type"));
+            const target = J.str(J.field(info, "targetId"));
+            var explicit = false;
+            for (self.explicit_workers) |id| if (eq(id, target)) {
+                explicit = true;
+                break;
+            };
+            // Chrome can pause a new dedicated worker even when its type is
+            // excluded from an auto-attach filter. Receive it so every paused
+            // worker is resumed, then detach without enabling observation.
+            if (eq(kind, "worker") and !self.workers and !explicit) {
+                _ = try self.call(a, sid, "Runtime.runIfWaitingForDebugger", .{});
+                _ = self.call(a, if (route.len > 0) route else null, "Target.detachFromTarget", .{ .sessionId = sid }) catch |err| {
+                    if (err != error.CdpCommandFailed and err != error.SessionDetached) return err;
+                    return;
+                };
+                return;
+            }
             const slot = blk: {
                 var active: usize = 0;
                 for (self.sessions) |s| if (s.active) {
@@ -136,14 +166,14 @@ pub const Tree = struct {
                 defer _ = socket.io.swapCancelProtection(protection);
                 _ = self.call(a, sid, "Runtime.runIfWaitingForDebugger", .{}) catch {};
             }
-            if (eq(slot.kind.slice(), "iframe")) _ = try self.call(a, sid, "Page.enable", .{});
-            _ = try self.call(a, sid, "Runtime.enable", .{});
-            if (self.configure) |configure| try configure(self.configure_context, self, sid);
-            try self.autoAttach(a, sid, true);
-            _ = try self.call(a, sid, "Runtime.runIfWaitingForDebugger", .{});
+            self.prepare(a, sid, kind) catch |err| {
+                if (err == error.SessionDetached) return;
+                return err;
+            };
         } else if (eq(method, "Target.detachedFromTarget")) {
             const sid = J.str(J.field(p, "sessionId"));
-            if (self.session(sid)) |s| s.active = false;
+            const detached = self.session(sid) orelse return;
+            detached.active = false;
             for (&self.contexts) |*c| if (c.active and eq(c.session.slice(), sid)) {
                 c.active = false;
             };
@@ -170,6 +200,13 @@ pub const Tree = struct {
             };
         }
         if (self.old_handler) |handler| try handler(self.old_context.?, socket, raw);
+    }
+    fn prepare(self: *Tree, a: A, sid: []const u8, kind: []const u8) !void {
+        if (eq(kind, "iframe")) _ = try self.call(a, sid, "Page.enable", .{});
+        _ = try self.call(a, sid, "Runtime.enable", .{});
+        if (self.configure) |configure| try configure(self.configure_context, self, sid);
+        try self.autoAttach(a, sid, true);
+        _ = try self.call(a, sid, "Runtime.runIfWaitingForDebugger", .{});
     }
     pub fn frames(self: *Tree, a: A) !V {
         var result: std.ArrayList(V) = .empty;
@@ -216,4 +253,19 @@ pub fn callSession(a: A, socket: *C.WsSession, sid: ?[]const u8, method: []const
 }
 fn eq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
+}
+
+pub fn workerKind(kind: []const u8) bool {
+    return eq(kind, "worker") or eq(kind, "shared_worker") or eq(kind, "service_worker");
+}
+pub fn workers(a: A, socket: *C.WsSession) !V {
+    const targets = J.field(try callSession(a, socket, null, "Target.getTargets", .{}), "targetInfos");
+    if (targets != .array) return error.InvalidProtocolReply;
+    var result: std.ArrayList(V) = .empty;
+    for (targets.array.items) |target| {
+        if (!workerKind(J.str(J.field(target, "type")))) continue;
+        if (result.items.len == 2048) return error.TargetLimitExceeded;
+        try result.append(a, try J.val(a, .{ .id = J.field(target, "targetId"), .type = J.field(target, "type"), .url = J.field(target, "url"), .title = J.field(target, "title"), .context = J.field(target, "browserContextId"), .opener = J.field(target, "openerId") }));
+    }
+    return J.val(a, result.items);
 }

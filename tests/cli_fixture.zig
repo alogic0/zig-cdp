@@ -52,6 +52,13 @@ pub const Fixture = struct {
             };
             return;
         }
+        if (H.eql(u8, target, "/slow-worker-body")) {
+            try input.io.sleep(.fromSeconds(2), .awake);
+            return input.response.send(.{ .body = "late body", .headers = &.{.{ .name = "Content-Type", .value = "text/plain" }} });
+        }
+        inline for (.{ "worker.js", "nested-worker.js", "shared-worker.js", "service-worker.js" }) |script| {
+            if (H.eql(u8, target, "/" ++ script)) return input.response.send(.{ .body = @embedFile("fixtures/" ++ script), .headers = &.{.{ .name = "Content-Type", .value = "text/javascript" }} });
+        }
         if (H.eql(u8, target, "/frame-controls")) return input.response.send(.{ .body = @embedFile("fixtures/frame-controls.html"), .headers = &.{.{ .name = "Content-Type", .value = "text/html" }} });
         if (H.eql(u8, target, "/workflow")) return input.response.send(.{ .body = @embedFile("fixtures/workflow.html"), .headers = &.{.{ .name = "Content-Type", .value = "text/html" }} });
         if (std.mem.startsWith(u8, target, "/api/save")) return input.response.send(.{ .body = "{\"saved\":true,\"id\":42}", .headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });

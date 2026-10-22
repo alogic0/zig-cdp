@@ -308,3 +308,14 @@ closed roots and assigned slots. Low-level `command`, `eval`, `protocol`,
 navigation and expression waits remain document operations in the library;
 the CLI rejects combining those operations with `--shadow`. See the
 [CLI root semantics and bounds](cli.md#shadow-roots).
+
+
+`target_tree.workers(allocator, socket)` discovers worker metadata without
+attaching. `Tree.workers` enables recursive dedicated-worker tracking;
+`include_frames` controls related iframe tracking. For explicit worker IDs,
+provide borrowed `explicit_workers` before `start()` and call `attachWorker()`
+for each. Shared/service workers are never automatically selected by origin.
+The optional `configure` hook runs after Runtime is enabled and before a paused
+new target resumes. Session IDs passed to hooks are borrowed for that callback.
+Tree teardown detaches only its own sessions; it does not close worker targets.
+The finite JSONL observer and its signal/capture policy remain CLI-owned.

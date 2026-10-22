@@ -32,6 +32,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "workflow", .run = @import("cli_workflow.zig").run },
         .{ .name = "upload", .run = @import("cli_upload.zig").run },
         .{ .name = "input", .run = @import("cli_input.zig").run },
+        .{ .name = "workers", .run = @import("cli_workers.zig").run },
         .{ .name = "observe", .run = @import("cli_observe.zig").run },
         .{ .name = "focus", .run = @import("cli_focus.zig").run },
     };

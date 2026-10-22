@@ -77,6 +77,9 @@ commands; [frame scope and limits](docs/cli.md#frames) explain navigation and in
 Use `shadow-roots` to discover open/closed author components, then repeat
 `--shadow HOST_CSS` to scope the same actions to a nested component.
 [Shadow scope](docs/cli.md#shadow-roots) also works inside selected frames.
+Use `observe --targets related` for iframe and dedicated-worker evidence, and
+`workers` plus repeated `--worker ID` for explicit shared/service workers.
+[Worker observation](docs/cli.md#worker-observation) explains readiness and lifetimes.
 
 ### Start and retain a session
 

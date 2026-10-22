@@ -13,6 +13,7 @@ const help =
     \\      [--user-data-dir PATH] [--idle-timeout SECONDS]
     \\                                Own a persistent browser (foreground)
     \\status                           Browser version, URL, and session state
+    \\workers                          Discover worker IDs/types across the browser
     \\tabs                             List tab IDs, titles, URLs, and selection
     \\shadow-roots                     Discover author shadow host paths and types
     \\frames                           List frame IDs, parents, names and URLs
@@ -49,6 +50,7 @@ const help =
     \\  Limits above are ceilings; stdout emits readiness and a final summary.
     \\close                            Stop the owned browser and server
     \\
+    \\Observer target scope: --targets page|related, --worker ID (repeatable), --max-targets N
     \\LOCATOR: --selector CSS | --role ROLE [--name NAME] | --text TEXT
     \\Element commands also accept LOCATOR instead of positional CSS.
     \\Options: --tab ID, --frame ID, --shadow HOST_CSS (repeatable), --timeout MS, --limit BYTES, --state STATE
@@ -125,13 +127,23 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
     }
     if (std.mem.eql(u8, command, "observe")) {
         var options: observe.Options = .{};
+        var workers: std.ArrayList([]const u8) = .empty;
         var seen: std.StringHashMap(void) = .init(a);
         while (iterator.next()) |option| {
-            if (seen.contains(option)) return error.InvalidOption;
+            if (!std.mem.eql(u8, option, "--worker") and seen.contains(option)) return error.InvalidOption;
             try seen.put(option, {});
             const value = iterator.next() orelse return error.MissingOptionValue;
-            if (std.mem.eql(u8, option, "--tab")) options.tab = value else if (std.mem.eql(u8, option, "--out")) options.out = try absolute(a, init.io, value) else if (std.mem.eql(u8, option, "--events")) options.events = value else if (std.mem.eql(u8, option, "--duration")) options.duration = std.fmt.parseInt(u32, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--max-events")) options.max_events = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--max-bytes")) options.max_bytes = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--body-limit")) options.body_limit = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--body-url")) options.body_url = value else if (std.mem.eql(u8, option, "--body-method")) options.body_method = value else return error.UnknownOption;
+            if (std.mem.eql(u8, option, "--worker")) {
+                if (workers.items.len == 64) return error.InvalidLimit;
+                try workers.append(a, value);
+            } else if (std.mem.eql(u8, option, "--targets")) {
+                if (!std.mem.eql(u8, value, "related") and !std.mem.eql(u8, value, "page")) return error.InvalidOption;
+                options.related = std.mem.eql(u8, value, "related");
+            } else if (std.mem.eql(u8, option, "--max-targets")) {
+                options.max_targets = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit;
+            } else if (std.mem.eql(u8, option, "--tab")) options.tab = value else if (std.mem.eql(u8, option, "--out")) options.out = try absolute(a, init.io, value) else if (std.mem.eql(u8, option, "--events")) options.events = value else if (std.mem.eql(u8, option, "--duration")) options.duration = std.fmt.parseInt(u32, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--max-events")) options.max_events = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--max-bytes")) options.max_bytes = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--body-limit")) options.body_limit = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--body-url")) options.body_url = value else if (std.mem.eql(u8, option, "--body-method")) options.body_method = value else return error.UnknownOption;
         }
+        options.workers = workers.items;
         return observe.run(a, init.gpa, init.io, path, borrowed, options);
     }
     input.* = .{ .command = command };

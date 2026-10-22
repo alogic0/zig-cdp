@@ -367,14 +367,17 @@ zig-cdp --endpoint "$endpoint" click --tab "$tab_id" --role button --name Save
 The same syntax works with `--session PATH`. An explicit tab is required; the
 owner resolves it once and the observer borrows an independent connection.
 Observation does not occupy the owner's command loop, install interception,
-change download paths, replay requests or acquire browser ownership. Workers
-and separate frame targets are outside this capture scope. Existing owner
-origin restrictions remain active.
+change download paths, replay requests or acquire browser ownership. The default
+`--targets page` captures only the selected page connection. Add `--targets related`
+for recursive iframe and dedicated-worker capture; select shared/service workers
+by explicit `--worker ID`. Existing owner origin restrictions remain active.
 
 `--out` must name a new file, created with mode 0600. It contains JSON Lines,
-version 1, with `tab`, increasing `seq`, Unix `observed_ms`, `kind`, and `data`.
+version 1, with `tab`, actual source `target`, `target_type`, `session`, increasing
+`seq`, Unix `observed_ms`, `kind`, and `data`.
 Kinds include console, exception, request, response, redirect, finished, failed,
-and body. Network records correlate `request_id` and redirect `hop`; request and
+body, target-ready and target-lost. Network records correlate `session`,
+`request_id` and redirect `hop`; request and
 response records include frame/loader IDs when available. CDP timestamps retain
 their original units (network seconds, Runtime milliseconds). Console records
 include bounded argument descriptions and the first source location; objects
@@ -396,6 +399,7 @@ Limits (options may lower these ceilings):
 | `--max-events` output records | 4096 | 4096 |
 | `--max-bytes` capture bytes | 8388608 | 8388608 |
 | `--body-limit` decoded body bytes | 1048576 | 1048576 |
+| `--max-targets` attached child targets | 64 | 64 |
 
 At most 4096 active requests are retained. Individual incoming events are
 limited to 2 MiB; metadata output records to 64 KiB. Console text is limited to
@@ -569,3 +573,46 @@ A chain has at most 16 hosts of at most 8192 bytes each. Discovery visits at mos
 limit instead of returning an incomplete path list. `--limit` bounds discovery
 JSON bytes (default 20,000; maximum 1 MiB). The existing operation deadline and
 transport message bounds apply throughout.
+
+
+## Worker observation
+
+```sh
+zig-cdp --endpoint "$endpoint" workers
+zig-cdp --endpoint "$endpoint" observe --tab "$tab_id" \
+  --targets related --worker "$shared_id" --worker "$service_id" \
+  --duration 30000 --out "$capture" \
+  --body-method POST --body-url 'https://example.test/api/save'
+```
+
+`workers` lists IDs, types, URLs, titles, context IDs and opener IDs when Chrome
+provides them. This is browser-wide discovery; it can include extensions and
+other contexts. Select the exact intended IDs. The observer never guesses a
+shared/service worker's association from URL or origin. Repeated `--worker ID`
+can also select a dedicated worker explicitly, independently of `--targets`.
+Duplicate IDs and non-worker targets are rejected before readiness.
+
+`--targets related` recursively observes the selected page's out-of-process
+iframes and dedicated/nested workers. Shared/service workers require explicit
+selection. Newly created targets are briefly paused while Runtime/Network are
+enabled, then resumed; failures and teardown release this observer's attachment.
+When Chrome pauses an excluded dedicated worker, the tracker resumes and
+immediately detaches without enabling observation. Worker code, network policy,
+caches and downloads are unchanged by observation.
+
+The stdout readiness record lists configured initial targets. Later attachments
+produce `target-ready`; detachments produce `target-lost` and release request
+metadata. Replacement related targets get new IDs/sessions and are attached
+again. An explicitly selected shared/service ID refers to that target's lifetime;
+if it is replaced, discover the new ID and start a new capture. No pre-attachment
+history is promised. Application startup already underway before attachment may
+have emitted events that cannot be recovered.
+
+Record budgets, active-request bounds and duration are global across targets.
+The 64-child-target cap excludes the selected page; the frame-context map has
+256 entries. A pending matched body lost to detach, load failure or capture end
+reports `unavailable` and makes completion unsuccessful. Normal termination of a
+worker with no pending matched body leaves other targets observable. Root-tab
+closure ends capture. Cancellation and limits leave the borrowed browser and
+unrelated workers running. These limits bound the observer's retained state;
+they do not limit application memory in Chrome.

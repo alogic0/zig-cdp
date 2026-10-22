@@ -58,6 +58,7 @@ fn execute(a: A, io: std.Io, endpoint: []const u8, input: session.Request, diagn
     switch (op) {
         .close => return .{ .string = "disconnected" },
         .tabs => return connection.tabs(),
+        .workers => return @import("cdp").target_tree.workers(a, &connection.socket),
         .status => if (input.tab == null) {
             const version = try Agent.call(a, &connection.socket, "Browser.getVersion", .{});
             return J.val(a, .{ .ownership = "external", .browser = J.field(version, "product"), .port = connection.client.port });

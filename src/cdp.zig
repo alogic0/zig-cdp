@@ -230,7 +230,9 @@ pub const WsSession = struct {
         const id = self.next_id;
         self.next_id += 1;
 
-        const route = if (session_id) |sid| try std.json.Stringify.valueAlloc(self.alloc, sid, .{}) else null;
+        const stable_session = if (session_id) |sid| try self.alloc.dupe(u8, sid) else null;
+        defer if (stable_session) |sid| self.alloc.free(sid);
+        const route = if (stable_session) |sid| try std.json.Stringify.valueAlloc(self.alloc, sid, .{}) else null;
         defer if (route) |bytes| self.alloc.free(bytes);
         const cmd = if (route) |sid|
             try std.fmt.allocPrint(self.alloc, "{{\"id\":{d},\"sessionId\":{s},\"method\":\"{s}\",\"params\":{s}}}", .{ id, sid, method, params_json orelse "{}" })
@@ -263,7 +265,7 @@ pub const WsSession = struct {
                         if (err == error.SessionDetached) detached = true;
                         return err;
                     };
-                    if (session_id) |expected| if (std.mem.eql(u8, journey.str(journey.field(envelope.value, "method")), "Target.detachedFromTarget") and
+                    if (stable_session) |expected| if (std.mem.eql(u8, journey.str(journey.field(envelope.value, "method")), "Target.detachedFromTarget") and
                         std.mem.eql(u8, journey.str(journey.field(journey.field(envelope.value, "params"), "sessionId")), expected))
                     {
                         detached = true;

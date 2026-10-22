@@ -34,7 +34,7 @@ pub const Request = struct {
 const max_request = 1024 * 1024;
 const max_response = 16 * 1024 * 1024;
 
-const Op = enum { status, tabs, frames, @"shadow-roots", @"new-tab", @"switch-tab", @"close-tab", allow, open, reload, content, eval, click, fill, text, read, snapshot, select, press, wait, timeout, screenshot, upload, download, drag, protocol, sequence, pause, close };
+const Op = enum { status, tabs, workers, frames, @"shadow-roots", @"new-tab", @"switch-tab", @"close-tab", allow, open, reload, content, eval, click, fill, text, read, snapshot, select, press, wait, timeout, screenshot, upload, download, drag, protocol, sequence, pause, close };
 
 pub fn operation(input: Request) anyerror!Op {
     const op = std.meta.stringToEnum(Op, input.command) orelse return error.UnknownCommand;
@@ -87,7 +87,7 @@ pub fn operation(input: Request) anyerror!Op {
     if (!std.mem.eql(u8, input.state, "visible") and (op != .wait or input.locator == null)) return error.InvalidOption;
     if (input.full_page and op != .screenshot) return error.InvalidOption;
     if (input.background and op != .@"new-tab" and op != .@"switch-tab") return error.InvalidOption;
-    if (input.tab != null and (op == .close or op == .allow or op == .timeout or op == .tabs or op == .@"new-tab" or op == .@"switch-tab")) return error.InvalidOption;
+    if (input.tab != null and (op == .close or op == .allow or op == .timeout or op == .tabs or op == .workers or op == .@"new-tab" or op == .@"switch-tab")) return error.InvalidOption;
     if (input.limit == 0 or input.limit > 1024 * 1024) return error.InvalidLimit;
     if (input.timeout_ms) |ms| if (ms == 0 or ms > 120000) return error.InvalidTimeout;
     if (input.locator) |query| {
@@ -102,7 +102,7 @@ pub fn operation(input: Request) anyerror!Op {
         return op;
     }
     const valid = switch (op) {
-        .status, .tabs, .frames, .@"shadow-roots", .reload, .close, .read, .snapshot => argc == 0,
+        .status, .tabs, .workers, .frames, .@"shadow-roots", .reload, .close, .read, .snapshot => argc == 0,
         .@"new-tab" => argc <= 1,
         .@"close-tab" => argc <= 1 and !(input.tab != null and argc != 0),
         .fill, .select, .download => argc == 2,
@@ -610,6 +610,7 @@ const State = struct {
         diagnostics.phase = .connect;
         const tabs = try self.refresh();
         switch (op) {
+            .workers => return @import("cdp").target_tree.workers(a, &self.browser.socket),
             .tabs => {
                 var result: std.ArrayList(V) = .empty;
                 for (tabs) |tab| try result.append(a, try J.val(a, .{ .id = tab.id, .title = tab.title, .url = tab.url, .selected = std.mem.eql(u8, tab.id, self.page.target) }));
