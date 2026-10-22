@@ -18,6 +18,9 @@ test "independent consumer launches and evaluates" {
     try std.testing.expect(J.number(J.field(snapshot, "returned_nodes")) > 0);
     try command.click(.{ .role = "button", .name = "Package action" });
     try std.testing.expectEqual(.completed, diagnostics.action);
+    _ = try command.protocol("Page.getLayoutMetrics", try J.parse(arena.allocator(), "{}"));
+    try command.content("<div id=from style='width:50px;height:50px'>From</div><div id=to style='width:50px;height:50px'>To</div>");
+    try command.drag(.{ .selector = "#from" }, .{ .selector = "#to" }, 0, 2);
     var connection = try Agent.Connection.connect(arena.allocator(), std.testing.io, try arena.allocator().print("http://127.0.0.1:{d}", .{browser.client.port}));
     defer connection.disconnect();
     try std.testing.expect((try connection.tabs()).array.items.len > 0);

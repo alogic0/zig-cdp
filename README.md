@@ -62,6 +62,9 @@ still requests foreground activation. Ordinary attachment and recovery do not.
 Observe across separate action commands with `observe --tab ID --out NEW_PATH`.
 Wait for its readiness record before acting. See [capture options and bounds](docs/cli.md#observation-across-commands), including exact method/URL response-body filters.
 
+Use `drag`, `protocol --params FILE|-`, and `sequence --file FILE|-` for held
+input and bounded action sequences. See [the sequence format and cleanup contract](docs/cli.md#held-input-and-sequences).
+
 ### Start and retain a session
 
 Record three absolute paths in your task state:

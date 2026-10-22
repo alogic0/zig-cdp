@@ -3,6 +3,9 @@ const std = @import("std");
 const cdp = @import("cdp.zig");
 const J = @import("cdp_journey.zig");
 const A = std.mem.Allocator;
+const Input = @import("cdp_input.zig");
+pub const validateProtocol = Input.validate;
+pub const protocol_methods = Input.methods;
 pub const Value = std.json.Value;
 
 pub const Query = struct {
@@ -21,9 +24,14 @@ pub const Query = struct {
 };
 
 pub const Diagnostics = struct {
+    pub const Action = enum { not_started, possibly_dispatched, completed };
     phase: enum { validate, connect, resolve, inspect, action, output } = .validate,
     match_count: ?usize = null,
-    action: enum { not_started, possibly_dispatched, completed } = .not_started,
+    action: Action = .not_started,
+    step: ?usize = null,
+    steps: []Step = &.{},
+    input_release: enum { not_needed, complete, incomplete } = .not_needed,
+    pub const Step = struct { index: usize, command: []const u8, action: Action = .not_started, err: ?[]const u8 = null };
 };
 
 /// Owns only CDP connections. Disconnect never closes tabs, contexts, profiles
@@ -102,6 +110,7 @@ pub const Page = struct {
     group: []const u8,
     deadline_ms: i64,
     previous_deadline: ?i64,
+    input: Input.State = .{},
 
     pub fn init(a: A, io: std.Io, socket: *cdp.WsSession, timeout_ms: u32, diagnostics: *Diagnostics) !Page {
         var random: [8]u8 = undefined;
@@ -116,6 +125,7 @@ pub const Page = struct {
     }
 
     pub fn deinit(self: *Page) void {
+        self.input.finish(self);
         // Release remote handles even after the operation budget expires. A
         // failed cleanup seals this socket rather than reusing uncertain state.
         const protection = self.io.swapCancelProtection(.blocked);
@@ -283,6 +293,29 @@ pub const Page = struct {
     }
 
     pub fn click(self: *Page, query: Query) !void {
+        try self.input.prepare(self);
+        const point = try self.stablePoint(query);
+        const x = J.field(point, "x");
+        const y = J.field(point, "y");
+        _ = try self.protocol("Input.dispatchMouseEvent", try J.val(self.a, .{ .type = "mouseMoved", .x = x, .y = y }));
+        errdefer self.input.release(self);
+        _ = try self.protocol("Input.dispatchMouseEvent", try J.val(self.a, .{ .type = "mousePressed", .x = x, .y = y, .button = "left", .buttons = 1, .clickCount = 1 }));
+        _ = try self.protocol("Input.dispatchMouseEvent", try J.val(self.a, .{ .type = "mouseReleased", .x = x, .y = y, .button = "left", .buttons = 0, .clickCount = 1 }));
+        self.diagnostics.action = .completed;
+    }
+
+    pub fn protocol(self: *Page, method: []const u8, params: Value) !Value {
+        return self.input.send(self, method, params);
+    }
+
+    pub fn delay(self: *Page, milliseconds: u32) !void {
+        const remaining = self.deadline_ms - now(self.io);
+        if (remaining <= 0) return error.Timeout;
+        try self.io.sleep(.fromMilliseconds(@min(remaining, @as(i64, milliseconds))), .awake);
+        if (now(self.io) >= self.deadline_ms) return error.Timeout;
+    }
+
+    fn stablePoint(self: *Page, query: Query) !Value {
         var blocked: anyerror = error.ElementNotVisible;
         while (true) {
             if (now(self.io) >= self.deadline_ms) return blocked;
@@ -298,21 +331,45 @@ pub const Page = struct {
                 info = try view.helper(id, "point", info);
             }
             const reason = J.str(J.field(info, "reason"));
-            if (reason.len == 0) {
-                const x = J.field(info, "x");
-                const y = J.field(info, "y");
-                _ = try view.command("Input.dispatchMouseEvent", .{ .type = "mouseMoved", .x = x, .y = y });
-                self.diagnostics.phase = .action;
-                self.diagnostics.action = .possibly_dispatched;
-                _ = try view.command("Input.dispatchMouseEvent", .{ .type = "mousePressed", .x = x, .y = y, .button = "left", .buttons = @as(u32, 1), .clickCount = @as(u32, 1) });
-                _ = try view.command("Input.dispatchMouseEvent", .{ .type = "mouseReleased", .x = x, .y = y, .button = "left", .buttons = @as(u32, 0), .clickCount = @as(u32, 1) });
-                self.diagnostics.action = .completed;
-                return;
-            }
+            if (reason.len == 0) return J.parse(self.a, try J.json(view.a, info));
             blocked = if (std.mem.eql(u8, reason, "disabled")) error.ElementDisabled else if (std.mem.eql(u8, reason, "covered")) error.ElementCovered else if (std.mem.eql(u8, reason, "moving")) error.ElementNotStable else error.ElementNotVisible;
-            if (now(self.io) >= self.deadline_ms) return blocked;
             self.pause() catch |err| return if (err == error.Canceled) err else blocked;
         }
+    }
+
+    pub fn drag(self: *Page, source: Query, destination: Query, hold_ms: u32, steps: u32) !void {
+        try source.validate();
+        try destination.validate();
+        if (hold_ms > 10000 or steps < 2 or steps > 120) return error.InvalidDrag;
+        var dispatched = false;
+        errdefer if (dispatched) {
+            self.diagnostics.action = .possibly_dispatched;
+        };
+        try self.input.prepare(self);
+        // Validate both ends before pressing; resolve again after scrolling.
+        _ = try self.stablePoint(destination);
+        const from = try self.stablePoint(source);
+        const epoch = try self.eval("performance.timeOrigin");
+        const x = numeric(J.field(from, "x"));
+        const y = numeric(J.field(from, "y"));
+        _ = try self.protocol("Input.dispatchMouseEvent", try J.val(self.a, .{ .type = "mouseMoved", .x = x, .y = y }));
+        errdefer self.input.release(self);
+        dispatched = true;
+        _ = try self.protocol("Input.dispatchMouseEvent", try J.val(self.a, .{ .type = "mousePressed", .x = x, .y = y, .button = "left", .buttons = 1, .clickCount = 1 }));
+        try self.delay(hold_ms);
+        if (numeric(try self.eval("performance.timeOrigin")) != numeric(epoch)) return error.DocumentChanged;
+        const to = try self.stablePoint(destination);
+        const tx = numeric(J.field(to, "x"));
+        const ty = numeric(J.field(to, "y"));
+        var i: u32 = 1;
+        while (i <= steps) : (i += 1) {
+            const fraction = @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(steps));
+            _ = try self.protocol("Input.dispatchMouseEvent", try J.val(self.a, .{ .type = "mouseMoved", .x = x + (tx - x) * fraction, .y = y + (ty - y) * fraction, .button = "left", .buttons = 1 }));
+            try self.delay(16);
+        }
+        if (numeric(try self.eval("performance.timeOrigin")) != numeric(epoch)) return error.DocumentChanged;
+        _ = try self.protocol("Input.dispatchMouseEvent", try J.val(self.a, .{ .type = "mouseReleased", .x = tx, .y = ty, .button = "left", .buttons = 0, .clickCount = 1 }));
+        self.diagnostics.action = .completed;
     }
 
     pub fn fill(self: *Page, query: Query, value: []const u8) !void {
@@ -325,7 +382,7 @@ pub const Page = struct {
         self.diagnostics.action = .possibly_dispatched;
         if (value.len == 0) {
             try self.press(null, "Backspace");
-        } else _ = try self.command("Input.insertText", .{ .text = value });
+        } else _ = try self.protocol("Input.insertText", try J.val(self.a, .{ .text = value }));
         self.diagnostics.action = .completed;
     }
 
@@ -391,8 +448,9 @@ pub const Page = struct {
         }
         self.diagnostics.phase = .action;
         self.diagnostics.action = .possibly_dispatched;
-        _ = try self.command("Input.dispatchKeyEvent", .{ .type = "keyDown", .key = key.key, .code = key.code, .windowsVirtualKeyCode = key.virtual, .modifiers = key.modifiers, .text = key.text });
-        _ = try self.command("Input.dispatchKeyEvent", .{ .type = "keyUp", .key = key.key, .code = key.code, .windowsVirtualKeyCode = key.virtual, .modifiers = key.modifiers });
+        errdefer self.input.release(self);
+        _ = try self.protocol("Input.dispatchKeyEvent", try J.val(self.a, .{ .type = "keyDown", .key = key.key, .code = key.code, .windowsVirtualKeyCode = key.virtual, .modifiers = key.modifiers, .text = key.text }));
+        _ = try self.protocol("Input.dispatchKeyEvent", try J.val(self.a, .{ .type = "keyUp", .key = key.key, .code = key.code, .windowsVirtualKeyCode = key.virtual, .modifiers = key.modifiers }));
         self.diagnostics.action = .completed;
     }
 
@@ -454,7 +512,7 @@ pub const Page = struct {
         self.diagnostics.phase = .inspect;
         // A never-active headed tab may have no compositor frame. A scoped
         // screencast requests frames without activating it or changing metrics.
-        const hidden = std.mem.eql(u8, J.str(try self.eval("document.visibilityState")), "hidden");
+        const hidden = !self.input.frames and std.mem.eql(u8, J.str(try self.eval("document.visibilityState")), "hidden");
         if (hidden) _ = try self.command("Page.startScreencast", .{ .format = "png", .everyNthFrame = 1 });
         defer if (hidden) {
             const protection = self.io.swapCancelProtection(.blocked);

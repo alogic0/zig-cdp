@@ -1,0 +1,12 @@
+<!doctype html><meta charset=utf-8><title>Held sortable fixture</title>
+<style>body{margin:8px} #board{display:flex;gap:100px;height:100px} #card,#drop{width:100px;height:80px;background:#aaa;user-select:none} #drop{background:#ddd} #cover{position:absolute;top:180px;left:8px;width:100px;height:40px;background:red} #covered{position:absolute;top:180px;left:8px;width:100px;height:40px}</style>
+<div id=board><div id=card>Card</div><div id=drop>Drop here</div></div>
+<input id=name><button disabled id=disabled>Disabled</button><button id=covered>Covered</button><div id=cover></div>
+<button class=ambiguous>A</button><button class=ambiguous>B</button><button id=moving>Moving</button><output id=result></output>
+<script>
+window.inputEvents=[];window.held=false;window.moves=0;window.started=0;window.keys=[];
+addEventListener('keydown',e=>keys.push(e.key));addEventListener('keyup',e=>keys=keys.filter(k=>k!==e.key));
+addEventListener('pointerdown',e=>{inputEvents.push({type:e.type,trusted:e.isTrusted});held=true;started=performance.now();moves=0});
+addEventListener('pointermove',e=>{if(held&&e.buttons===1&&performance.now()-started>=100)moves++});
+addEventListener('pointerup',e=>{inputEvents.push({type:e.type,trusted:e.isTrusted});if(held&&moves>=3&&e.target.closest('#drop')){drop.append(card);result.textContent='moved'}held=false});
+</script>

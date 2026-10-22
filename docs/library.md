@@ -265,3 +265,11 @@ No CDP call may be active during the migration.
 The CLI `observe` command borrows a separate `agent.Connection`; it does not
 enable journey observation retention or add signal handlers to the library.
 Its capture schema and lifetime are documented in [the CLI guide](cli.md#observation-across-commands).
+
+`agent.Page.drag(source, destination, hold_ms, steps)` resolves page geometry and
+sends trusted input. `protocol(method, params)` validates the supported set
+exported as `agent.protocol_methods`; `agent.validateProtocol` can preflight it.
+`Page.deinit` releases held input and clears temporary background input emulation.
+Keep the page and its allocator alive until deinit. `Diagnostics` adds sequence
+step reports and input-release status. The sequence file format belongs to the
+CLI; it does not add a host runtime to the library.

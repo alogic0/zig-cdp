@@ -69,6 +69,8 @@ pub fn run(c: H.Context) !void {
         }
         _ = try page.failure(&.{ "click", "--selector", "#missing", "--timeout", "100" }, "ElementNotFound");
         try unchanged(c, window, sentinel, original);
+        try @import("cli_input.zig").exercise(page);
+        try unchanged(c, window, sentinel, original);
         if (!client.endpoint) {
             _ = try own.result(&.{ "switch-tab", original_id, "--background" });
             try H.equal(try H.field(try own.result(&.{"status"}), "tab_id"), original_id);

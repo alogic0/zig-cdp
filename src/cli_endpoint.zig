@@ -7,22 +7,40 @@ const session = @import("cli_session.zig");
 const A = std.mem.Allocator;
 const V = std.json.Value;
 
+var interrupted = std.atomic.Value(bool).init(false);
+fn signal(_: std.posix.SIG) callconv(.c) void {
+    interrupted.store(true, .release);
+}
+fn awaitSignal(io: std.Io) !void {
+    while (!interrupted.load(.acquire)) try io.sleep(.fromMilliseconds(25), .awake);
+}
+
 pub fn run(a: A, io: std.Io, endpoint: []const u8, input: session.Request) ![]const u8 {
     var diagnostics: Agent.Diagnostics = .{ .phase = .connect };
     _ = session.operation(input) catch |err| return session.failure(a, input, err, .{});
-    const Result = union(enum) { value: anyerror!V, budget: std.Io.Cancelable!void };
-    var results: [2]Result = undefined;
+    interrupted.store(false, .release);
+    const action: std.posix.Sigaction = .{ .handler = .{ .handler = signal }, .mask = std.posix.sigemptyset(), .flags = 0 };
+    var old_int: std.posix.Sigaction = undefined;
+    var old_term: std.posix.Sigaction = undefined;
+    std.posix.sigaction(.INT, &action, &old_int);
+    defer std.posix.sigaction(.INT, &old_int, null);
+    std.posix.sigaction(.TERM, &action, &old_term);
+    defer std.posix.sigaction(.TERM, &old_term, null);
+    const Result = union(enum) { value: anyerror!V, budget: std.Io.Cancelable!void, signal: anyerror!void };
+    var results: [3]Result = undefined;
     var select = std.Io.Select(Result).init(io, &results);
     var joined = false;
     defer if (!joined) select.cancelDiscard();
     const budget = input.timeout_ms orelse 30_000;
     try select.concurrent(.value, execute, .{ a, io, endpoint, input, &diagnostics, now(io) + budget });
     try select.concurrent(.budget, std.Io.sleep, .{ io, .fromMilliseconds(@as(i64, budget) + 300), .awake });
+    try select.concurrent(.signal, awaitSignal, .{io});
     const result = try select.await();
     select.cancelDiscard();
     joined = true;
     const value = switch (result) {
         .value => |value| value catch |err| return session.failure(a, input, err, diagnostics),
+        .signal => return session.failure(a, input, error.Interrupted, diagnostics),
         .budget => return session.failure(a, input, error.CommandTimeout, diagnostics),
     };
     const reply = try J.json(a, .{ .ok = true, .result = value, .command = input.command, .tab = input.tab });

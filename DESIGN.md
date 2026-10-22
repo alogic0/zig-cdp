@@ -154,3 +154,11 @@ connection and a finite private capture file. It never occupies the session
 command loop or composes with its Fetch handler. Network and Runtime domains
 are enabled only on that observer connection; disconnection releases them.
 Request metadata, frames, output and duration have separate limits.
+
+Agent input tracks one held mouse button and up to sixteen keys. Failure and
+command completion release them on the same target under a bounded cleanup
+deadline. Lost sockets report incomplete release. Temporary background focus
+emulation and compositor requests are scoped to the command; no desktop input
+is injected. The CLI validates bounded sequence documents before dispatch and
+uses one page, deadline and per-step diagnostic list. Browser/context methods
+remain outside its explicitly supported page-protocol set.

@@ -22,6 +22,17 @@ expiry, size/event overflow, oversized bodies, SIGINT/SIGTERM, real write
 failure, tab closure and browser exit. Capture teardown preserves other browser
 state. No global journey observation or origin-policy changes.
 
+Slice 3 adds strict held drag, a validated page-protocol subset and versioned
+bounded sequences with one connection/deadline. Reports identify each step's
+dispatch state and input-release outcome. Named and protocol input share held
+state tracking; failure, expiry, endpoint signals and owned client disconnect
+attempt bounded cleanup. Tests cover trusted sortable movement, ambiguous,
+disabled, covered and moving controls, preflight rejection, stopped later steps,
+mouse/key release, navigation and target loss, and recovery. Input acceptance,
+headed focus and the independent package consumer pass both profiles; existing
+agent acceptance and library checks pass Debug. Background input uses temporary
+focus emulation and compositor frames without desktop activation.
+
 ## Low-core session scheduling, October 21, 2026
 
 The first hosted CLI checks exposed a timeout on the initial session `status`

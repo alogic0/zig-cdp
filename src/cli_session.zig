@@ -23,15 +23,47 @@ pub const Request = struct {
     full_page: bool = false,
     background: bool = false,
     modern: bool = false,
+    params: ?V = null,
+    destination: ?Agent.Query = null,
+    hold_ms: u32 = 300,
+    steps: u32 = 12,
 };
 const max_request = 1024 * 1024;
 const max_response = 16 * 1024 * 1024;
 
-const Op = enum { status, tabs, @"new-tab", @"switch-tab", @"close-tab", allow, open, reload, content, eval, click, fill, text, read, snapshot, select, press, wait, timeout, screenshot, upload, download, close };
+const Op = enum { status, tabs, @"new-tab", @"switch-tab", @"close-tab", allow, open, reload, content, eval, click, fill, text, read, snapshot, select, press, wait, timeout, screenshot, upload, download, drag, protocol, sequence, pause, close };
 
-pub fn operation(input: Request) !Op {
+pub fn operation(input: Request) anyerror!Op {
     const op = std.meta.stringToEnum(Op, input.command) orelse return error.UnknownCommand;
     const argc = input.args.len;
+    if (op != .drag and (input.destination != null or input.hold_ms != 300 or input.steps != 12)) return error.InvalidOption;
+    if (op == .drag) {
+        if (input.hold_ms > 10000 or input.steps < 2 or input.steps > 120) return error.InvalidDrag;
+        if (input.destination) |destination| try destination.validate();
+        if (input.locator != null and input.destination == null) return error.InvalidLocator;
+    }
+    if (op != .protocol and input.params != null) return error.InvalidOption;
+    if (op == .protocol) {
+        if (input.params) |params| {
+            if (argc != 1) return error.WrongArgumentCount;
+            try Agent.validateProtocol(input.args[0], params);
+        } else {
+            if (argc != 2) return error.WrongArgumentCount;
+            var parsed = std.json.parseFromSlice(V, std.heap.page_allocator, input.args[1], .{}) catch return error.InvalidProtocolParameters;
+            defer parsed.deinit();
+            try Agent.validateProtocol(input.args[0], parsed.value);
+        }
+    }
+    if (op == .sequence) {
+        if (argc != 1) return error.WrongArgumentCount;
+        var parsed = try parseSequence(std.heap.page_allocator, input.args[0]);
+        defer parsed.deinit();
+    }
+    if (op == .pause) {
+        if (argc != 1) return error.WrongArgumentCount;
+        const ms = std.fmt.parseInt(u32, input.args[0], 10) catch return error.InvalidPause;
+        if (ms > 10000) return error.InvalidPause;
+    }
     if (!std.mem.eql(u8, input.state, "visible") and !std.mem.eql(u8, input.state, "hidden") and !std.mem.eql(u8, input.state, "attached") and !std.mem.eql(u8, input.state, "detached")) return error.InvalidWaitState;
     if (!std.mem.eql(u8, input.state, "visible") and (op != .wait or input.locator == null)) return error.InvalidOption;
     if (input.full_page and op != .screenshot) return error.InvalidOption;
@@ -42,7 +74,7 @@ pub fn operation(input: Request) !Op {
     if (input.locator) |query| {
         try query.validate();
         const valid = switch (op) {
-            .click, .text, .read, .wait => argc == 0,
+            .click, .text, .read, .wait, .drag => argc == 0,
             .fill, .select, .press, .upload, .download => argc == 1,
             else => return error.InvalidLocator,
         };
@@ -54,10 +86,31 @@ pub fn operation(input: Request) !Op {
         .@"new-tab" => argc <= 1,
         .@"close-tab" => argc <= 1 and !(input.tab != null and argc != 0),
         .fill, .select, .upload, .download => argc == 2,
+        .protocol => argc == (if (input.params == null) @as(usize, 2) else 1),
+        .drag => argc == (if (input.destination == null) @as(usize, 2) else 1),
         else => argc == 1,
     };
     if (!valid) return error.WrongArgumentCount;
     return op;
+}
+
+pub const Sequence = struct { version: u8, steps: []Request };
+pub fn parseSequence(a: A, raw: []const u8) anyerror!std.json.Parsed(Sequence) {
+    if (raw.len > 1024 * 1024) return error.SequenceTooLarge;
+    var parsed = std.json.parseFromSlice(Sequence, a, raw, .{}) catch return error.InvalidSequence;
+    errdefer parsed.deinit();
+    if (parsed.value.version != 1 or parsed.value.steps.len == 0 or parsed.value.steps.len > 128) return error.InvalidSequence;
+    for (parsed.value.steps) |*step| {
+        step.modern = true;
+        if (step.tab != null or step.timeout_ms != null or step.background) return error.InvalidSequence;
+        const op = std.meta.stringToEnum(Op, step.command) orelse return error.InvalidSequence;
+        switch (op) {
+            .open, .reload, .content, .eval, .click, .fill, .text, .read, .snapshot, .select, .press, .wait, .screenshot, .upload, .drag, .protocol, .pause => {},
+            else => return error.InvalidSequence,
+        }
+        _ = try operation(step.*);
+    }
+    return parsed;
 }
 
 pub fn validateOrigin(origin: []const u8) !void {
@@ -187,14 +240,15 @@ fn respond(a: A, io: std.Io, stream: Stream, state: *State) ![]const u8 {
     _ = operation(parsed.value) catch |err| return failure(a, parsed.value, err, diagnostics);
     var input = parsed.value;
     if (input.tab == null) input.tab = try a.dupe(u8, state.selected());
-    const Result = union(enum) { value: anyerror!V, budget: std.Io.Cancelable!void };
-    var results: [2]Result = undefined;
+    const Result = union(enum) { value: anyerror!V, budget: std.Io.Cancelable!void, disconnected: anyerror!void };
+    var results: [3]Result = undefined;
     var select = std.Io.Select(Result).init(io, &results);
     var joined = false;
     defer if (!joined) select.cancelDiscard();
     const budget = parsed.value.timeout_ms orelse @as(u32, @intCast(state.timeout_ms));
     try select.concurrent(.value, State.execute, .{ state, a, parsed.value, &diagnostics, @as(i64, @intCast(std.Io.Clock.awake.now(io).toMilliseconds())) + budget });
     try select.concurrent(.budget, std.Io.sleep, .{ io, .fromMilliseconds(@as(i64, budget) + 300), .awake });
+    if (std.mem.eql(u8, input.command, "drag") or std.mem.eql(u8, input.command, "sequence")) try select.concurrent(.disconnected, awaitDisconnect, .{ io, stream });
     const result = try select.await();
     select.cancelDiscard();
     joined = true;
@@ -204,6 +258,7 @@ fn respond(a: A, io: std.Io, stream: Stream, state: *State) ![]const u8 {
             return failure(a, input, err, diagnostics);
         },
         .budget => return failure(a, input, error.CommandTimeout, diagnostics),
+        .disconnected => return failure(a, input, error.ClientDisconnected, diagnostics),
     };
     const reply = try J.json(a, .{ .ok = true, .result = value, .command = parsed.value.command, .tab = parsed.value.tab orelse state.selected() });
     if (reply.len > max_response) {
@@ -213,15 +268,26 @@ fn respond(a: A, io: std.Io, stream: Stream, state: *State) ![]const u8 {
     return reply;
 }
 
-pub fn failure(a: A, input: Request, err: anyerror, diagnostics: Agent.Diagnostics) ![]const u8 {
-    return J.json(a, .{ .ok = false, .err = @errorName(err), .command = input.command, .tab = input.tab, .@"error" = .{ .code = @errorName(err), .phase = diagnostics.phase, .match_count = diagnostics.match_count, .action = diagnostics.action } });
+fn awaitDisconnect(io: std.Io, stream: Stream) !void {
+    var buffer: [1]u8 = undefined;
+    var buffers = [_][]u8{&buffer};
+    const result = try io.operateTimeout(.{ .net_read = .{ .socket_handle = stream.socket.handle, .data = &buffers } }, .{ .duration = .{ .raw = .fromSeconds(180), .clock = .awake } });
+    _ = try result.net_read;
 }
 
-pub fn executePage(page: *Agent.Page, input: Request) !V {
+pub fn failure(a: A, input: Request, err: anyerror, diagnostics: Agent.Diagnostics) ![]const u8 {
+    return J.json(a, .{ .ok = false, .err = @errorName(err), .command = input.command, .tab = input.tab, .@"error" = .{ .code = @errorName(err), .phase = diagnostics.phase, .match_count = diagnostics.match_count, .action = diagnostics.action, .step = diagnostics.step, .steps = diagnostics.steps, .input_release = diagnostics.input_release } });
+}
+
+pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
     const op = try operation(input);
     const query: Agent.Query = input.locator orelse .{ .selector = if (input.args.len > 0) input.args[0] else "body" };
     const index: usize = if (input.locator == null) 1 else 0;
     switch (op) {
+        .drag => try page.drag(query, input.destination orelse .{ .selector = input.args[1] }, input.hold_ms, input.steps),
+        .protocol => return page.protocol(input.args[0], if (input.params) |params| try J.parse(page.a, try J.json(page.a, params)) else try J.parse(page.a, input.args[1])),
+        .pause => try page.delay(try std.fmt.parseInt(u32, input.args[0], 10)),
+        .sequence => return executeSequence(page, input.args[0]),
         .snapshot => return page.snapshot(input.limit),
         .read => return page.read(input.locator, input.limit),
         .text => return page.text(query),
@@ -255,6 +321,34 @@ pub fn executePage(page: *Agent.Page, input: Request) !V {
         else => return error.InvalidEndpointCommand,
     }
     return .{ .bool = true };
+}
+
+fn executeSequence(page: *Agent.Page, raw: []const u8) anyerror!V {
+    var parsed = try parseSequence(page.a, raw);
+    defer parsed.deinit();
+    const reports = try page.a.alloc(Agent.Diagnostics.Step, parsed.value.steps.len);
+    for (parsed.value.steps, 0..) |step, i| reports[i] = .{ .index = i, .command = try page.a.dupe(u8, step.command) };
+    page.diagnostics.steps = reports;
+    defer page.input.release(page);
+    var results: std.ArrayList(V) = .empty;
+    var output_bytes: usize = 0;
+    for (parsed.value.steps, 0..) |step, i| {
+        page.diagnostics.step = i;
+        page.diagnostics.action = .not_started;
+        page.diagnostics.match_count = null;
+        const result = executePage(page, step) catch |err| {
+            reports[i].action = page.diagnostics.action;
+            reports[i].err = @errorName(err);
+            return err;
+        };
+        reports[i].action = page.diagnostics.action;
+        output_bytes += (try J.json(page.a, result)).len;
+        if (output_bytes > 8 * 1024 * 1024) return error.SequenceOutputTooLarge;
+        try results.append(page.a, result);
+    }
+    page.input.release(page);
+    if (page.diagnostics.input_release == .incomplete) return error.InputReleaseIncomplete;
+    return J.val(page.a, .{ .steps = reports, .results = results.items, .input_release = page.diagnostics.input_release });
 }
 
 const State = struct {
@@ -503,6 +597,14 @@ const State = struct {
             if (!contains(tabs, id)) return error.TabNotFound;
             break :blk try self.obtain(id);
         } else self.page;
+        if (op == .sequence) {
+            var sequence = try parseSequence(a, input.args[0]);
+            defer sequence.deinit();
+            for (sequence.value.steps) |step| if (std.mem.eql(u8, step.command, "open") and !self.permitted(step.args[0])) return error.OriginNotAllowed;
+        }
+        const previous_unload = p.allow_unload;
+        if (op == .sequence) p.allow_unload = true;
+        defer p.allow_unload = previous_unload;
         var page = try self.commandPage(p, diagnostics);
         defer page.deinit();
         switch (op) {

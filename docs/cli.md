@@ -409,3 +409,65 @@ stream. Stdout ends with a summary containing `reason`, record/byte counts,
 `dropped`, `truncated`, and `unavailable_bodies`. This readiness + summary stream
 is the exception to the ordinary one-result stdout contract. SIGINT/SIGTERM
 release only observer sockets and preserve the browser and partial file.
+
+## Held input and sequences
+
+`drag SOURCE_CSS DESTINATION_CSS` resolves strict, stable, enabled, uncovered
+controls, holds the left button, moves incrementally and releases it. Semantic
+locators work with `--selector`/`--role`/`--text` for the source and
+`--to-selector`/`--to-role`/`--to-name`/`--to-text` for the destination.
+`--hold MS` defaults to 300 (maximum 10000); `--steps N` defaults to 12 (2–120).
+Movement steps are separated by 16 ms, within the overall command deadline.
+Background input temporarily enables page focus emulation and compositor frames;
+these are cleared on completion. It does not activate Chrome's tab/window or
+change viewport metrics. Application focus/visibility callbacks can run during
+this emulation. Drag geometry is local to the page, never desktop coordinates.
+
+`protocol METHOD --params FILE|-` accepts a JSON object (default `{}`). The
+initial supported methods are `Input.dispatchMouseEvent`,
+`Input.dispatchKeyEvent`, `Input.insertText`, `DOM.getDocument`,
+`DOM.querySelector`, `DOM.querySelectorAll`, `DOM.getBoxModel`,
+`Page.getLayoutMetrics`, and `Accessibility.getFullAXTree`. Parameters and method
+scope are validated before dispatch. Mouse input supports moved/pressed/released/
+wheel events, left/right/middle buttons, coordinates, buttons, clickCount,
+modifiers and wheel deltas. Key input supports type/key/code/text/unmodifiedText,
+virtual key codes, modifiers, repeat/keypad/system flags and location. DOM tree
+depth is capped at 32; piercing and browser/context lifecycle calls are excluded.
+Use typed `open`, `new-tab`, `close-tab` and `close` for lifecycle operations.
+
+Use `sequence --file FILE|- --timeout MS` to retain one connection and input
+state across steps. Example file:
+
+```json
+{"version":1,"steps":[
+  {"command":"fill","locator":{"role":"textbox","name":"Name"},"args":["Sample"]},
+  {"command":"protocol","args":["Input.dispatchKeyEvent"],"params":{"type":"keyDown","key":"Shift","code":"ShiftLeft","windowsVirtualKeyCode":16}},
+  {"command":"pause","args":["150"]},
+  {"command":"protocol","args":["Input.dispatchKeyEvent"],"params":{"type":"keyUp","key":"Shift","code":"ShiftLeft","windowsVirtualKeyCode":16}},
+  {"command":"click","locator":{"role":"button","name":"Save"}},
+  {"command":"read"}
+]}
+```
+
+The document is at most 1 MiB and contains 1–128 steps, all checked before
+execution. Step fields match command requests: `command`, string-array `args`,
+optional `locator`, `destination`, `hold_ms`, `steps`, `params`, `limit`, `state`,
+and `full_page`. Step-local tabs, deadlines, background flags, nested sequences,
+owner commands and downloads are rejected. Supported named steps are open,
+reload, content, eval, click, fill, text, read, snapshot, select, press, wait,
+screenshot, upload and drag; protocol and pause complete the list. A pause is
+0–10000 ms. Relative file paths resolve against the invoking client. There is
+one overall deadline and an 8 MiB result budget. No loops, branching, host code,
+result binding or automatic replay are provided. Validation cannot predict
+future page state; actionability is checked when each step executes.
+
+Results contain per-step results and zero-based step reports. A failure includes
+`error.step`, reports for every step (`action` and optional `err`), and
+`input_release`: `not_needed`, `complete`, or `incomplete`. Later steps remain
+`not_started`. Cleanup attempts mouse/key release on the same target for up to
+200 ms; a lost connection reports incomplete release without replacing the
+original error. Up to one mouse button and 16 keys may be held. Outstanding
+input is also released at successful sequence completion; use a sequence to
+hold input between calls. Endpoint SIGINT/SIGTERM cancels and performs this
+cleanup. Disconnecting an owned drag/sequence client cancels its in-flight work
+and releases input. Inspect page state and step reports before retrying a write.

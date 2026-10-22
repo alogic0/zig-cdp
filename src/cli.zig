@@ -34,6 +34,11 @@ const help =
     \\screenshot PATH                  Write a PNG
     \\upload CSS PATH                  Set one file input
     \\download CSS PATH                Click and save a completed download
+    \\drag SOURCE DESTINATION         Held drag; --hold MS (300), --steps N (12)
+    \\  LOCATOR --to-selector CSS | --to-role ROLE [--to-name NAME] | --to-text TEXT
+    \\protocol METHOD [--params FILE|-] Supported page CDP call; JSON object params
+    \\sequence --file FILE|-           Version 1, 1..128 steps, one --timeout budget
+    \\pause MS                        Delay 0..10000 ms within the command budget
     \\observe --tab ID --out NEW_PATH  Independent finite capture; wait for readiness
     \\  --events console,exceptions,network --duration MS (default 30000; max 120000)
     \\  --body-method METHOD --body-url EXACT_URL (optional matched response text)
@@ -155,6 +160,23 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
                 const destination = if (std.mem.eql(u8, arg, "--selector")) &query.selector else if (std.mem.eql(u8, arg, "--role")) &query.role else if (std.mem.eql(u8, arg, "--name")) &query.name else &query.text;
                 if (destination.* != null) return error.InvalidLocator;
                 destination.* = value;
+            } else if (std.mem.startsWith(u8, arg, "--to-")) {
+                if (!std.mem.eql(u8, command, "drag")) return error.InvalidOption;
+                if (input.destination == null) input.destination = .{};
+                const q = &input.destination.?;
+                const destination = if (std.mem.eql(u8, arg, "--to-selector")) &q.selector else if (std.mem.eql(u8, arg, "--to-role")) &q.role else if (std.mem.eql(u8, arg, "--to-name")) &q.name else if (std.mem.eql(u8, arg, "--to-text")) &q.text else return error.UnknownOption;
+                if (destination.* != null) return error.InvalidLocator;
+                destination.* = value;
+            } else if (std.mem.eql(u8, arg, "--hold")) {
+                if (!std.mem.eql(u8, command, "drag")) return error.InvalidOption;
+                input.hold_ms = std.fmt.parseInt(u32, value, 10) catch return error.InvalidDrag;
+            } else if (std.mem.eql(u8, arg, "--steps")) {
+                if (!std.mem.eql(u8, command, "drag")) return error.InvalidOption;
+                input.steps = std.fmt.parseInt(u32, value, 10) catch return error.InvalidDrag;
+            } else if (std.mem.eql(u8, arg, "--params") or std.mem.eql(u8, arg, "--file")) {
+                if (value_supplied or !(std.mem.eql(u8, command, "protocol") and std.mem.eql(u8, arg, "--params") or std.mem.eql(u8, command, "sequence") and std.mem.eql(u8, arg, "--file"))) return error.InvalidOption;
+                value_supplied = true;
+                try args.append(a, try readInput(a, init.io, value));
             } else if (std.mem.eql(u8, arg, "--tab")) {
                 if (input.tab != null) return error.InvalidOption;
                 input.tab = value;
@@ -188,6 +210,20 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
         try args.append(a, output.?);
         output = null;
     }
+    if (std.mem.eql(u8, command, "protocol") and args.items.len == 1) try args.append(a, "{}");
+    if (std.mem.eql(u8, command, "sequence") and args.items.len == 1) {
+        var sequence = try session.parseSequence(a, args.items[0]);
+        defer sequence.deinit();
+        for (sequence.value.steps) |*step| {
+            if (std.mem.eql(u8, step.command, "screenshot") or std.mem.eql(u8, step.command, "upload")) {
+                const index: usize = if (std.mem.eql(u8, step.command, "screenshot") or step.locator != null) 0 else 1;
+                const copy = try a.dupe([]const u8, step.args);
+                copy[index] = try absolute(a, init.io, copy[index]);
+                step.args = copy;
+            }
+        }
+        args.items[0] = try J.json(a, sequence.value);
+    }
     input.args = args.items;
     const op = try session.operation(input.*);
     switch (op) {
@@ -205,7 +241,7 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
     if (output) |destination| if (J.boolean(J.field(parsed.value, "ok"))) {
         diagnostics.phase = .output;
         diagnostics.action = switch (op) {
-            .click, .fill, .select, .press, .upload, .download, .open, .reload, .content, .eval, .@"new-tab", .@"switch-tab", .@"close-tab", .close => .completed,
+            .click, .fill, .select, .press, .drag, .protocol, .sequence, .upload, .download, .open, .reload, .content, .eval, .@"new-tab", .@"switch-tab", .@"close-tab", .close => .completed,
             else => .not_started,
         };
         try Agent.writeFile(init.io, destination, reply);
