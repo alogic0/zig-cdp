@@ -310,17 +310,19 @@ pub const Page = struct {
             const resolved = try self.command("DOM.resolveNode", .{ .backendNodeId = backend, .objectGroup = self.group });
             return .{ .count = 1, .id = J.str(J.field(J.field(resolved, "object"), "objectId")) };
         }
-        const function = try self.a.print("function(q){{return ({s}).query.call(this,q)}}", .{@embedFile("cdp_agent_helpers.js")});
-        const array = try self.invoke(scope, function, query, false);
-        const array_id = J.str(J.field(array, "objectId"));
-        if (array_id.len == 0) return error.InvalidLocator;
-        defer self.release(array_id);
-        const count_value = J.field(try self.invoke(array_id, "function(){return this.length}", .{}, true), "value");
+        const function = try self.a.print("function(q){{const nodes=({s}).query.call(this,q);return nodes.length===1?nodes[0]:{{count:nodes.length}}}}", .{@embedFile("cdp_agent_helpers.js")});
+        const result = try self.invoke(scope, function, query, false);
+        const id = J.str(J.field(result, "objectId"));
+        if (id.len == 0) return error.InvalidLocator;
+        if (std.mem.eql(u8, J.str(J.field(result, "subtype")), "node")) {
+            self.diagnostics.match_count = 1;
+            return .{ .count = 1, .id = id };
+        }
+        defer self.release(id);
+        const count_value = J.field(try self.invoke(id, "function(){return this.count}", .{}, true), "value");
         const count: usize = @intCast(J.number(count_value));
         self.diagnostics.match_count = count;
-        if (count != 1) return .{ .count = count };
-        const element = try self.invoke(array_id, "function(){return this[0]}", .{}, false);
-        return .{ .count = count, .id = J.str(J.field(element, "objectId")) };
+        return .{ .count = count };
     }
 
     fn resolve(self: *Page, query: Query) ![]const u8 {
@@ -386,6 +388,7 @@ pub const Page = struct {
     }
 
     pub fn click(self: *Page, query: Query) !void {
+        try self.enabledFrame();
         try self.input.prepare(self);
         const point = try self.stablePoint(query);
         const x = J.field(point, "x");
@@ -408,6 +411,11 @@ pub const Page = struct {
         if (now(self.io) >= self.deadline_ms) return error.Timeout;
     }
 
+    fn enabledFrame(self: *Page) !void {
+        if (self.frame == null) return;
+        const state = try self.framePoint(try J.val(self.a, .{ .check_only = true }));
+        if (std.mem.eql(u8, J.str(J.field(state, "reason")), "disabled")) return error.ElementDisabled;
+    }
     fn framePoint(self: *Page, point: Value) !Value {
         if (self.frame == null) return point;
         const tree = try self.ensureTargets();
@@ -437,8 +445,13 @@ pub const Page = struct {
     }
     fn stablePoint(self: *Page, query: Query) !Value {
         var blocked: anyerror = error.ElementNotVisible;
+        var next_cost_ms: i64 = 0;
         while (true) {
-            if (now(self.io) >= self.deadline_ms) return blocked;
+            const started = now(self.io);
+            // A frame sample spans several RPCs. Preserve the last observed
+            // actionability failure when another sample cannot fit, rather
+            // than starting work that would exhaust the wire cleanup margin.
+            if (started + next_cost_ms >= self.deadline_ms) return blocked;
             var scratch = std.heap.ArenaAllocator.init(self.socket.alloc);
             defer scratch.deinit();
             var view = self.*;
@@ -459,11 +472,21 @@ pub const Page = struct {
             if (reason.len == 0) return J.parse(self.a, try J.json(view.a, info));
             if (std.mem.eql(u8, reason, "transform")) return error.FrameTransformUnsupported;
             blocked = if (std.mem.eql(u8, reason, "disabled")) error.ElementDisabled else if (std.mem.eql(u8, reason, "covered")) error.ElementCovered else if (std.mem.eql(u8, reason, "moving")) error.ElementNotStable else error.ElementNotVisible;
+            next_cost_ms = @max(25, 2 * (now(self.io) - started));
             self.pause() catch |err| return if (err == error.Canceled) err else blocked;
         }
     }
 
+    fn sameDocument(self: *Page, epoch: Value) !void {
+        const current = self.eval("performance.timeOrigin") catch |err| switch (err) {
+            error.CdpCommandFailed, error.SessionDetached, error.FrameContextUnavailable, error.FrameNotFound => return error.DocumentChanged,
+            else => return err,
+        };
+        if (numeric(current) != numeric(epoch)) return error.DocumentChanged;
+    }
+
     pub fn drag(self: *Page, source: Query, destination: Query, hold_ms: u32, steps: u32) !void {
+        try self.enabledFrame();
         try source.validate();
         try destination.validate();
         if (hold_ms > 10000 or steps < 2 or steps > 120) return error.InvalidDrag;
@@ -471,8 +494,18 @@ pub const Page = struct {
         errdefer if (dispatched) {
             self.diagnostics.action = .possibly_dispatched;
         };
+        // Resolve strict locators before compositor setup can consume a short
+        // request budget. Neither ambiguity nor a missing end dispatches input.
+        const source_id = try self.resolve(source);
+        defer self.release(source_id);
+        const destination_id = try self.resolve(destination);
+        defer self.release(destination_id);
         try self.input.prepare(self);
-        // Validate both ends before pressing; resolve again after scrolling.
+        // Poll a blocked source before spending the remaining budget on the
+        // destination. The final source sample still checks stability after
+        // destination scrolling; an actionable source needs no extra delay.
+        const source_info = try self.helper(source_id, "point", .{});
+        if (J.str(J.field(source_info, "reason")).len > 0) _ = try self.stablePoint(source);
         _ = try self.stablePoint(destination);
         const from = try self.stablePoint(source);
         const epoch = try self.eval("performance.timeOrigin");
@@ -483,7 +516,7 @@ pub const Page = struct {
         dispatched = true;
         _ = try self.protocol("Input.dispatchMouseEvent", try J.val(self.a, .{ .type = "mousePressed", .x = x, .y = y, .button = "left", .buttons = 1, .clickCount = 1 }));
         try self.delay(hold_ms);
-        if (numeric(try self.eval("performance.timeOrigin")) != numeric(epoch)) return error.DocumentChanged;
+        try self.sameDocument(epoch);
         const to = try self.stablePoint(destination);
         const tx = numeric(J.field(to, "x"));
         const ty = numeric(J.field(to, "y"));
@@ -493,17 +526,18 @@ pub const Page = struct {
             _ = try self.protocol("Input.dispatchMouseEvent", try J.val(self.a, .{ .type = "mouseMoved", .x = x + (tx - x) * fraction, .y = y + (ty - y) * fraction, .button = "left", .buttons = 1 }));
             try self.delay(16);
         }
-        if (numeric(try self.eval("performance.timeOrigin")) != numeric(epoch)) return error.DocumentChanged;
+        try self.sameDocument(epoch);
         _ = try self.protocol("Input.dispatchMouseEvent", try J.val(self.a, .{ .type = "mouseReleased", .x = tx, .y = ty, .button = "left", .buttons = 0, .clickCount = 1 }));
         self.diagnostics.action = .completed;
     }
 
     pub fn fill(self: *Page, query: Query, value: []const u8) !void {
+        try self.enabledFrame();
         const id = try self.resolve(query);
         defer self.release(id);
         if (!J.boolean(J.field(try self.helper(id, "info", .{}), "visible"))) return error.ElementNotVisible;
         const reason = J.str(try self.helper(id, "prepareFill", .{}));
-        if (reason.len != 0) return if (std.mem.eql(u8, reason, "disabled")) error.ElementDisabled else if (std.mem.eql(u8, reason, "readonly")) error.ElementReadOnly else error.ElementNotEditable;
+        if (reason.len != 0) return if (std.mem.eql(u8, reason, "disabled")) error.ElementDisabled else if (std.mem.eql(u8, reason, "readonly")) error.ElementReadOnly else if (std.mem.eql(u8, reason, "unfocused")) error.FocusOutsideScope else error.ElementNotEditable;
         self.diagnostics.phase = .action;
         self.diagnostics.action = .possibly_dispatched;
         if (value.len == 0) {
@@ -513,6 +547,7 @@ pub const Page = struct {
     }
 
     pub fn select(self: *Page, query: Query, value: []const u8) !void {
+        try self.enabledFrame();
         const id = try self.resolve(query);
         defer self.release(id);
         self.diagnostics.phase = .action;
@@ -566,11 +601,19 @@ pub const Page = struct {
     }
 
     pub fn press(self: *Page, query: ?Query, input: []const u8) !void {
+        try self.enabledFrame();
         const key = try Key.parse(self.a, input);
         if (query) |q| {
             const id = try self.resolve(q);
             defer self.release(id);
-            _ = try self.invoke(id, "function(){this.focus();return true}", .{}, true);
+            const info = try self.helper(id, "info", .{});
+            if (J.boolean(J.field(info, "disabled"))) return error.ElementDisabled;
+            if (!J.boolean(J.field(info, "visible"))) return error.ElementNotVisible;
+            if (!J.boolean(J.field(try self.invoke(id, "function(){this.focus();const active=this.getRootNode().activeElement;return active===this||this.contains(active)}", .{}, true), "value"))) return error.FocusOutsideScope;
+        }
+        if (self.frame != null and self.shadows.len == 0) {
+            try self.input.prepare(self);
+            if (!J.boolean(try self.eval("document.hasFocus() && document.activeElement!==document.body && document.activeElement!==document.documentElement"))) return error.FocusOutsideScope;
         }
         if (self.shadows.len > 0) {
             const scope = try Shadow.root(self);
@@ -590,6 +633,7 @@ pub const Page = struct {
     }
 
     pub fn uploadFiles(self: *Page, query: Query, filenames: []const []const u8) !void {
+        try self.enabledFrame();
         try validateFiles(self.io, filenames);
         const paths = try self.a.alloc([]const u8, filenames.len);
         const cwd = try std.Io.Dir.cwd().realPathFileAlloc(self.io, ".", self.a);

@@ -220,6 +220,7 @@ const Capture = struct {
         if (sid.len > 0) if (self.tree) |tree| for (&tree.sessions) |*s| {
             if (eq(s.id.slice(), sid)) return .{ .target = s.target.slice(), .kind = s.kind.slice(), .session = s.id.slice() };
         };
+        if (sid.len > 0) return .{ .session = sid, .kind = "unknown" };
         return .{ .target = self.options.tab };
     }
     fn copyOrigin(a: A, origin: Origin) !Origin {
@@ -276,6 +277,10 @@ const Capture = struct {
         const previous = self.origin;
         self.origin = self.originFor(J.str(J.field(value, "sessionId")));
         defer self.origin = previous;
+        if (self.origin.target.len == 0) {
+            self.dropped += 1;
+            return error.UnknownTargetSession;
+        }
         if (eq(method, "Target.detachedFromTarget")) return self.lost(a, J.str(J.field(p, "sessionId")));
         if (eq(method, "Runtime.consoleAPICalled") and selected(self.options.events, "console")) {
             var texts: std.ArrayList([]const u8) = .empty;
@@ -430,4 +435,7 @@ test "request identity and detach cleanup are scoped by CDP session" {
     try std.testing.expect(std.mem.indexOf(u8, bytes, "TargetDetached") != null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "\"target\":\"a\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, bytes, "\"target\":\"b\"") != null);
+    // A late event whose detached slot was reused must never become page data.
+    try std.testing.expectError(error.UnknownTargetSession, Capture.event(&capture, &socket, "{\"method\":\"Runtime.consoleAPICalled\",\"sessionId\":\"unknown\",\"params\":{}}"));
+    try std.testing.expectEqual(@as(usize, 1), capture.dropped);
 }

@@ -45,22 +45,37 @@ pub fn run(c: H.Context) !void {
                 _ = try request(scope, server.path, .{ .command = "close-tab", .args = .{tab} });
             }
         }
+        for (0..12) |_| {
+            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer arena.deinit();
+            var scope = c;
+            scope.a = arena.allocator();
+            _ = try request(scope, server.path, .{ .command = "content", .args = .{"<iframe name=resource srcdoc='<section id=host></section>'></iframe>"} });
+            const frames = try request(scope, server.path, .{ .command = "frames" });
+            const frame_id = try @import("cli_frames.zig").find(scope, frames, "resource");
+            _ = try request(scope, server.path, .{ .command = "eval", .frame = frame_id, .args = .{"document.querySelector('#host').attachShadow({mode:'closed'}).innerHTML='<input id=name><button>Save</button>';true"} });
+            _ = try request(scope, server.path, .{ .command = "fill", .frame = frame_id, .shadows = .{"#host"}, .args = .{ "#name", "bounded" } });
+            _ = try request(scope, server.path, .{ .command = "read", .frame = frame_id, .shadows = .{"#host"} });
+            _ = try request(scope, server.path, .{ .command = "snapshot", .frame = frame_id, .shadows = .{"#host"} });
+        }
         const tab_id = try H.str(try request(c, server.path, .{ .command = "status" }), "tab_id");
         const observed: H.Client = .{ .c = c, .target = server.path, .tab = tab_id };
         const Observe = @import("cli_observe.zig");
-        var observer = try Observe.start(observed, "resource-observer", &.{ "--out", try c.path("resource.jsonl"), "--events", "console", "--duration", "1000" });
+        var observer = try Observe.start(observed, "resource-observer", &.{ "--out", try c.path("resource.jsonl"), "--events", "console", "--duration", "1000", "--targets", "related" });
         defer observer.deinit();
         try Observe.ready(c, &observer);
+        _ = try request(c, server.path, .{ .command = "eval", .args = .{"window.resourceWorker=new Worker(URL.createObjectURL(new Blob([\"onmessage=()=>console.log('bounded worker')\"],{type:'text/javascript'})));true"} });
         for (0..12) |_| {
             var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer scratch.deinit();
             var scope = c;
             scope.a = scratch.allocator();
-            _ = try request(scope, server.path, .{ .command = "sequence", .args = .{try scope.json(.{ .version = 1, .steps = .{ .{ .command = "eval", .args = .{"console.log('bounded sequence'); true"} }, .{ .command = "read", .limit = 256 } } })} });
+            _ = try request(scope, server.path, .{ .command = "sequence", .args = .{try scope.json(.{ .version = 1, .steps = .{ .{ .command = "eval", .args = .{"resourceWorker.postMessage('bounded');console.log('bounded sequence'); true"} }, .{ .command = "read", .limit = 256 } } })} });
         }
         _ = try Observe.finish(c, &observer, true);
+        _ = try request(c, server.path, .{ .command = "eval", .args = .{"resourceWorker.terminate();true"} });
         const after = try H.S.resources.measure(c.a, c.io, owner_pid);
-        std.debug.print("RESOURCE warmup=24 inspections=720 tab_cycles=36 sequences=12 observer=1 rss_bytes={d}->{d} descriptors={d}->{d}\n", .{ before.rss_bytes, after.rss_bytes, before.descriptors, after.descriptors });
+        std.debug.print("RESOURCE warmup=24 inspections=720 tab_cycles=36 sequences=12 frame_shadow_cycles=12 observer_workers=1 rss_bytes={d}->{d} descriptors={d}->{d}\n", .{ before.rss_bytes, after.rss_bytes, before.descriptors, after.descriptors });
         try H.check(@as(i128, after.rss_bytes) - @as(i128, before.rss_bytes) < 32 * 1024 * 1024, "owner RSS growth below 32 MiB");
         try H.check(after.descriptors <= before.descriptors + 3, "owner descriptors at most baseline plus three");
         _ = try request(c, server.path, .{ .command = "content", .args = .{"<a id='d' download='a.txt' href='data:text/plain,owned'>Download</a>"} });

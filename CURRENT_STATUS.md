@@ -1,49 +1,68 @@
 # Current delivery
 
-## Frames, shadows, workers and shutdown, October 22, 2026
+## Frames, shadows, workers and shutdown completed (0.4.0), October 22, 2026
 
-The [new plan](docs/plans/2026-10-22-frames-shadows-workers.md) is in progress.
-Shutdown investigation reproduced a cancellation-propagation defect: the
-standard stream writer stores Canceled but returns WriteFailed, which the idle
-session pump treats as an ordinary browser fault and swallows. This can prevent
-the canceled server task from joining after a signal, matching the earlier log.
-WebSocket, discovery/upgrade and CLI reply I/O now preserve cancellation while
-retaining existing non-cancellation error codes. A deterministic injected write
-test failed before the fix and passes afterward.
+The [plan](docs/plans/2026-10-22-frames-shadows-workers.md) is complete.
+`frames` / `--frame ID` support same-process, cross-site and nested documents,
+including navigation across processes, scoped locators/snapshots, uploads,
+sequences and trusted input. Unique context IDs prevent numeric-context reuse;
+frame-owner geometry and inert state are checked before input. Held-input
+cancellation and navigation release the input and report document changes.
+Owned CLI origin interception persists on related iframe sessions.
 
-Debug and ReleaseSafe pass all thirteen library tests and eight single-CPU
-shutdown cases (suspended browsers and signals racing idle pumps). The unchanged
-ten-second shutdown gate verifies removed owned profiles/processes and survival
-of an unrelated browser. The precise timing of the original intermittent run
-was not reproduced; the swallowing defect is verified independently.
+Repeated `--shadow HOST_CSS` selects open/closed author roots through CDP DOM
+handles. `shadow-roots` returns reusable host chains. CSS/text/AX lookup, reads,
+snapshots and named actions honor the selected root and assigned slots. Tests
+cover closed-slot inert state, occlusion/motion, stale/replaced hosts, frame-plus-
+shadow actions and sequence preflight. Node, depth, root-count and output limits
+fail explicitly; wide discovery uses linear sibling counting.
 
-The frame slice adds flattened session routing, bounded related target/context
-tracking, `frames` discovery and `--frame ID` selection. Both ownership modes
-pass same-process, cross-site out-of-process and nested frame actions, uploads,
-sequences, process-changing navigation/reload, missing/removed frame rejection
-and ancestor occlusion. Raw protocol document lookup selects the frame; named
-pointer actions map through its ancestors. Owned Fetch policy persists on
-related iframe sessions. Context selection uses unique IDs to prevent numeric
-context reuse from redirecting an operation. Debug and ReleaseSafe focused
-checks and the independent exported package consumer pass; the integration
-headed/resource matrix remains pending with the shadow and worker slices.
+`observe --targets related` captures recursive iframe/dedicated-worker evidence;
+`workers` and repeated `--worker ID` explicitly select shared/service targets.
+Records include actual source target/type/session, and request/body correlation
+includes the session ID. Startup, nested/replacement workers, termination,
+interruption, limits, pending-body expiry and unrelated-worker survival pass.
+Unknown source sessions produce an incomplete capture rather than page data.
+A deterministic test covers identical request IDs in different sessions.
+Excluded dedicated workers affected by Chrome's startup throttle are resumed
+and detached without enabling observation.
 
-Shadow selection now supports repeated `--shadow` host chains, open/closed
-author roots and `shadow-roots` discovery. CSS/text/AX lookup, snapshots,
-rendered reads and named actions share that scope, including assigned slots.
-Native fixtures passed in Debug and ReleaseSafe across both ownership modes
-and cross-site frames: trusted input/drag, uploads, root isolation, closed-slot
-inert state, occlusion/motion, stale/replaced hosts and sequence preflight.
-The independent exported package consumer passed both profiles.
+Shutdown investigation reproduced a cancellation-propagation defect: the stream
+writer stored Canceled but returned WriteFailed, which the idle pump swallowed
+as an ordinary browser fault. WebSocket, discovery/upgrade and CLI reply I/O now
+preserve cancellation. The injected regression failed before the fix and passes
+afterward. Eight fault cases cover suspended browsers and signals racing idle
+pumps under the unchanged ten-second shutdown gate. The precise timing of the
+original intermittent run was not reproduced; this defect is verified separately.
 
-Worker observation is implemented with related iframe/dedicated-worker capture,
-explicit shared/service IDs, source metadata and session-scoped body correlation.
-Debug and single-CPU ReleaseSafe native checks pass; fourteen library/observer
-tests pass, including deterministic duplicate request IDs across sessions.
-Worker lifecycle, limits, interruption and pending-body expiry are covered.
-The existing page-only observer acceptance also passes. The final integration
-matrix remains pending. A startup-throttle regression now resumes
-excluded dedicated workers without enabling observation.
+Integration also exposed delayed TCP acknowledgements for masked commands larger
+than the writer buffer. WebSocket connections now enable TCP_NODELAY, eliminating
+the observed roughly 40 ms buffer-boundary delay. Unique CSS/text resolution
+needs fewer RPCs, drag validates locators before compositor setup, and compound
+geometry polling preserves its last observed failure within the command budget.
+The unchanged 350 ms held-input timeout check reaches input and verifies release.
+
+Verification with Zig 0.17.0 and Chrome 155.0.8059.84:
+
+| Check | Debug | ReleaseSafe |
+| --- | --- | --- |
+| Full native CLI, one allowed CPU | 14 scenario groups passed | 14 scenario groups passed |
+| Library and observer tests, one CPU | 14/14 passed | 14/14 passed |
+| Compile, example and install | passed | passed |
+| Xvfb/Openbox focus and native viewport | passed | passed |
+| Independent exported-package consumer | 1/1 passed | 1/1 passed |
+
+The resource workload retains 720 inspections, 36 tab cycles and 12 sequences,
+and adds 12 frame/closed-shadow cycles plus related worker observation. Owner
+RSS was 10,674,176 → 11,644,928 bytes in Debug and 4,190,208 → 4,907,008 in
+ReleaseSafe. Descriptors stayed 7 → 7 in both. The 32 MiB growth / three-extra-
+descriptor thresholds are unchanged. Tests use disposable profiles and private
+displays; temporary verification packages, exports and caches were removed.
+
+Rotated/skewed/reflected/3-D frame geometry is explicitly rejected before input.
+Explicit shared/service target replacements require rediscovery. Traversal and
+capture remain finite; see [scope and bounds](docs/cli.md#frames) and the
+[verification record](docs/plans/2026-10-22-frames-shadows-workers.md#delivery-and-verification).
 
 ## Browser workflow parity completed (0.3.0), October 22, 2026
 

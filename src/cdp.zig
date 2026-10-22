@@ -729,6 +729,10 @@ pub const CdpClient = struct {
 
         const stream = try (try std.Io.net.IpAddress.parse("127.0.0.1", self.port)).connect(self.io, .{ .mode = .stream });
         errdefer stream.close(self.io);
+        // Masked frames can span writer buffers. Do not leave their final
+        // fragment waiting for a delayed TCP acknowledgement between RPCs.
+        const no_delay: i32 = 1;
+        try std.posix.setsockopt(stream.socket.handle, std.os.linux.IPPROTO.TCP, std.os.linux.TCP.NODELAY, std.mem.asBytes(&no_delay));
 
         var rb: [1]u8 = undefined;
         var wb: [2048]u8 = undefined;

@@ -89,6 +89,21 @@ pub fn run(c: H.Context) !void {
     defer fixture.deinit();
     const origin = try fixture.origin(c);
     _ = try own.result(&.{ "allow", origin });
+    const cross = try std.mem.replaceOwned(u8, c.a, origin, "127.0.0.1", "localhost");
+    _ = try own.result(&.{ "allow", cross });
+    for ([_]H.Client{ own, endpoint }) |client| {
+        const id = try H.str(try client.result(&.{ "new-tab", "--background" }), "id");
+        const page: H.Client = .{ .c = c, .target = client.target, .endpoint = client.endpoint, .tab = id };
+        _ = try page.result(&.{ "open", origin });
+        _ = try page.result(&.{ "content", try c.a.print("<iframe name=component src='{s}/frame-controls' style='width:500px;height:400px;border:5px solid'></iframe>", .{cross}) });
+        var scoped = page;
+        scoped.frame = try @import("cli_frames.zig").find(c, try page.result(&.{"frames"}), "component");
+        try @import("cli_shadows.zig").exercise(scoped);
+        try unchanged(c, window, sentinel, original);
+        _ = try page.result(&.{ "screenshot", "--viewport", try c.path("frame-shadow.png") });
+        try unchanged(c, window, sentinel, original);
+        _ = try own.result(&.{ "close-tab", id });
+    }
     for ([_]H.Client{ own, endpoint }, 0..) |client, i| {
         const task = try @import("cli_workflow.zig").exercise(client, origin, try c.a.print("headed-complete-{d}", .{i}));
         try unchanged(c, window, sentinel, original);

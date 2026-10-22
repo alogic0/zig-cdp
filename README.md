@@ -9,7 +9,7 @@ ownership comes from [`zig-process`](https://github.com/alogic0/zig-process),
 downloaded automatically at a pinned revision and verified by its package hash.
 Node.js and a browser-driver service are not required.
 
-Version **0.3.0**, licensed under the [MIT License](LICENSE).
+Version **0.4.0**, licensed under the [MIT License](LICENSE).
 
 ## Install
 

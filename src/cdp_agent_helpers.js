@@ -18,7 +18,11 @@
     return true;
   },
   query(q) {
-    if (q.selector !== null) { const found=[...this.querySelectorAll(q.selector)]; for(const n of h.elements(this))if(n.getRootNode()!==this && n.matches(q.selector))found.push(n); return [...new Set(found)]; }
+    if (q.selector !== null) {
+      const found=[...this.querySelectorAll(q.selector)];
+      if(this.host)for(const slot of this.querySelectorAll('slot'))for(const n of slot.assignedElements({flatten:true}))for(const e of [n,...n.querySelectorAll('*')])if(e.matches(q.selector))found.push(e);
+      return [...new Set(found)];
+    }
     const norm = s => (s || '').replace(/\s+/g, ' ').trim();
     const nodes = h.elements(this).filter(n => norm(n.textContent) === norm(q.text));
     return nodes.filter(n => !nodes.some(child => child !== n && n.contains(child)));
@@ -52,6 +56,8 @@
     return h.hit(this,x,y) ? {x,y,bounds:{x:r.x,y:r.y,width:r.width,height:r.height}} : {reason:'covered'};
   },
   framePoint(point) {
+    if (h.disabled(this)) return {reason:'disabled'};
+    if (point.check_only) return point;
     if (!this.isConnected || !this.offsetWidth || !this.offsetHeight) return {reason:'hidden'};
     for(let n=this;n;n=h.parent(n)) {
       const m=new DOMMatrix(getComputedStyle(n).transform);
@@ -73,7 +79,8 @@
       const range=document.createRange(); range.selectNodeContents(this);
       const selection=getSelection(); selection.removeAllRanges(); selection.addRange(range);
     } else this.select();
-    return '';
+    const active=this.getRootNode().activeElement;
+    return active===this || this.contains(active) ? '' : 'unfocused';
   },
   select(value) {
     if (this.tagName!=='SELECT' || this.multiple || h.disabled(this)) return false;

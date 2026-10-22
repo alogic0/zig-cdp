@@ -83,5 +83,15 @@ pub fn run(c: H.Context) !void {
         scoped.frame = try @import("cli_frames.zig").find(c, try client.result(&.{"frames"}), "cross");
         try exercise(scoped);
     }
+    const own: H.Client = .{ .c = c, .target = owner.path };
+    _ = try own.result(&.{ "eval", @embedFile("fixtures/shadows.js") });
+    _ = try own.failure(&.{ "shadow-roots", "--limit", "1" }, "ShadowOutputLimitExceeded");
+    _ = try own.result(&.{ "eval", "document.body.innerHTML='<main></main>';document.querySelector('main').append(...Array.from({length:10001},()=>document.createElement('div')));true" });
+    _ = try own.failure(&.{"shadow-roots"}, "ShadowNodeLimitExceeded");
+    _ = try own.result(&.{ "eval", "document.body.innerHTML='<main></main>';for(let n=document.querySelector('main'),i=0;i<130;i++)n=n.appendChild(document.createElement('div'));true" });
+    _ = try own.failure(&.{"shadow-roots"}, "ShadowNodeLimitExceeded");
+    _ = try own.result(&.{ "eval", "document.body.innerHTML='';for(let i=0;i<65;i++)document.body.appendChild(document.createElement('section')).attachShadow({mode:'closed'});true" });
+    _ = try own.failure(&.{ "shadow-roots", "--limit", "1048576" }, "ShadowDepthExceeded");
+    try own.expect(&.{ "eval", "42" }, 42);
     try owner.close();
 }

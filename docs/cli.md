@@ -521,6 +521,11 @@ Same-process, out-of-process and nested frames are supported. Named pointer
 actions translate local geometry through frame borders and scale to the tab's
 viewport, checking ancestor clipping and occlusion. Rotated, skewed, reflected
 or 3-D frame transforms fail with `FrameTransformUnsupported` before input.
+Ancestor inert/disabled state also blocks fill, select, press and uploads.
+A key without a locator requires a focused control in the selected frame; use
+`--selector` or another locator to focus a specific control first. Geometry
+polling uses the command budget and preserves the last observed actionability
+failure when another compound sample cannot fit.
 Raw `protocol Input.*` calls retain CDP's top-level viewport coordinates;
 `DOM.getDocument` and DOM/accessibility inspection use the selected frame.
 `Page.getLayoutMetrics` reports top-level tab metrics.
@@ -530,6 +535,8 @@ change documents independently. Screenshots and tab/browser lifecycle remain
 top-level operations: their `--frame` option is rejected, and frame-scoped
 sequences reject screenshots before their first step. A frame's page can still
 navigate or remove it during an operation; failures are reported without replay.
+Navigation during a held drag reports `DocumentChanged` and attempts input
+release before returning.
 
 Routing retains at most 64 related target sessions and 256 default execution
 contexts. Frame discovery is capped at 128 frames and 16 nesting levels.
@@ -602,8 +609,9 @@ caches and downloads are unchanged by observation.
 
 The stdout readiness record lists configured initial targets. Later attachments
 produce `target-ready`; detachments produce `target-lost` and release request
-metadata. Replacement related targets get new IDs/sessions and are attached
-again. An explicitly selected shared/service ID refers to that target's lifetime;
+metadata. A late event from an unknown session ends capture as incomplete with
+`UnknownTargetSession`. Replacement related targets get new IDs/sessions and
+are attached again. An explicitly selected shared/service ID refers to that target's lifetime;
 if it is replaced, discover the new ID and start a new capture. No pre-attachment
 history is promised. Application startup already underway before attachment may
 have emitted events that cannot be recovered.

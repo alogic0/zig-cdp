@@ -73,13 +73,15 @@ const Scan = struct {
         };
         const children = J.field(node, "children");
         if (children != .array) return;
-        for (children.array.items, 0..) |child, i| {
+        var counts: std.StringHashMapUnmanaged(usize) = .empty;
+        defer counts.deinit(self.a);
+        for (children.array.items) |child| {
             if (J.number(J.field(child, "nodeType")) != 1) continue;
             const tag = J.str(J.field(child, "localName"));
-            var nth: usize = 1;
-            for (children.array.items[0..i]) |sibling| if (std.mem.eql(u8, tag, J.str(J.field(sibling, "localName")))) {
-                nth += 1;
-            };
+            const count = try counts.getOrPut(self.a, tag);
+            if (!count.found_existing) count.value_ptr.* = 0;
+            count.value_ptr.* += 1;
+            const nth = count.value_ptr.*;
             const selector = try self.a.print("{s}{s}{s}:nth-of-type({d})", .{ path, if (path.len > 0) " > " else "", tag, nth });
             try self.walk(child, selector, hosts, depth + 1);
         }

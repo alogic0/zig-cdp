@@ -48,6 +48,7 @@ test "independent consumer launches and evaluates" {
     var connection = try Agent.Connection.connect(arena.allocator(), std.testing.io, try arena.allocator().print("http://127.0.0.1:{d}", .{browser.client.port}));
     defer connection.disconnect();
     try std.testing.expect((try connection.tabs()).array.items.len > 0);
+    _ = try @import("cdp").target_tree.workers(arena.allocator(), &connection.socket);
     var borrowed = try connection.page(page.target);
     borrowed.close();
     connection.disconnect();

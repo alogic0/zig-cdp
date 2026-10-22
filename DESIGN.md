@@ -198,3 +198,16 @@ Initial readiness lists configured targets; later readiness/loss is explicit.
 Auto-attach pause cleanup also resumes excluded dedicated workers, because the
 Chrome startup throttle can otherwise leave an excluded worker paused. Worker
 selection and all observer output/signal policy remain in the CLI.
+
+Frame input checks include the owner chain's inert/disabled state before writes.
+Focus checks use each DOM root's activeElement, so background tabs retain their
+native focus behavior. Compound geometry polling reserves its measured next
+sample cost within the operation deadline. A drag whose execution context is
+destroyed reports DocumentChanged and still runs held-input cleanup.
+
+WebSocket TCP connections enable TCP_NODELAY. Masked commands larger than the
+writer buffer otherwise incur delayed-ACK waits at buffer boundaries, which
+can consume a short action budget before input is dispatched. Locator lookup
+returns a unique DOM handle directly and resolves both drag endpoints before
+compositor setup. Wide shadow discovery counts sibling tags once per parent;
+its node-limit check does not require quadratic sibling scans.
