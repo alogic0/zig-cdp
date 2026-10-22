@@ -65,6 +65,9 @@ Wait for its readiness record before acting. See [capture options and bounds](do
 Use `drag`, `protocol --params FILE|-`, and `sequence --file FILE|-` for held
 input and bounded action sequences. See [the sequence format and cleanup contract](docs/cli.md#held-input-and-sequences).
 
+For multiple uploads, repeat `--file PATH` on `upload`; the complete list is
+validated before replacing the file input selection.
+
 ### Start and retain a session
 
 Record three absolute paths in your task state:

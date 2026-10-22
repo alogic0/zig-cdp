@@ -32,7 +32,8 @@ const help =
     \\wait JAVASCRIPT                  Wait until an expression returns true
     \\timeout MILLISECONDS             Set page wait timeout (1..120000)
     \\screenshot PATH                  Write a PNG
-    \\upload CSS PATH                  Set one file input
+    \\upload CSS PATH                  Replace one file input selection
+    \\upload LOCATOR --file PATH...     Set 1..64 files; multiple control required
     \\download CSS PATH                Click and save a completed download
     \\drag SOURCE DESTINATION         Held drag; --hold MS (300), --steps N (12)
     \\  LOCATOR --to-selector CSS | --to-role ROLE [--to-name NAME] | --to-text TEXT
@@ -133,6 +134,7 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
     }
     input.* = .{ .command = command };
     var args: std.ArrayList([]const u8) = .empty;
+    var files: std.ArrayList([]const u8) = .empty;
     var output: ?[]const u8 = null;
     var literal = false;
     var value_supplied = false;
@@ -173,6 +175,9 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
             } else if (std.mem.eql(u8, arg, "--steps")) {
                 if (!std.mem.eql(u8, command, "drag")) return error.InvalidOption;
                 input.steps = std.fmt.parseInt(u32, value, 10) catch return error.InvalidDrag;
+            } else if (std.mem.eql(u8, arg, "--file") and std.mem.eql(u8, command, "upload")) {
+                if (files.items.len == 64) return error.FileCountExceeded;
+                try files.append(a, try absolute(a, init.io, value));
             } else if (std.mem.eql(u8, arg, "--params") or std.mem.eql(u8, arg, "--file")) {
                 if (value_supplied or !(std.mem.eql(u8, command, "protocol") and std.mem.eql(u8, arg, "--params") or std.mem.eql(u8, command, "sequence") and std.mem.eql(u8, arg, "--file"))) return error.InvalidOption;
                 value_supplied = true;
@@ -215,20 +220,34 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
         var sequence = try session.parseSequence(a, args.items[0]);
         defer sequence.deinit();
         for (sequence.value.steps) |*step| {
-            if (std.mem.eql(u8, step.command, "screenshot") or std.mem.eql(u8, step.command, "upload")) {
+            if (std.mem.eql(u8, step.command, "upload") and step.files.len > 0) {
+                const paths = try a.alloc([]const u8, step.files.len);
+                for (step.files, 0..) |file, i| paths[i] = try absolute(a, init.io, file);
+                step.files = paths;
+                try Agent.validateFiles(init.io, paths);
+            } else if (std.mem.eql(u8, step.command, "screenshot") or std.mem.eql(u8, step.command, "upload")) {
                 const index: usize = if (std.mem.eql(u8, step.command, "screenshot") or step.locator != null) 0 else 1;
                 const copy = try a.dupe([]const u8, step.args);
                 copy[index] = try absolute(a, init.io, copy[index]);
                 step.args = copy;
+                if (std.mem.eql(u8, step.command, "upload")) try Agent.validateFiles(init.io, &.{copy[index]});
             }
         }
         args.items[0] = try J.json(a, sequence.value);
     }
+    input.files = files.items;
     input.args = args.items;
     const op = try session.operation(input.*);
     switch (op) {
         .screenshot => args.items[0] = try absolute(a, init.io, args.items[0]),
-        .upload, .download => {
+        .upload => {
+            if (input.files.len == 0) {
+                const index: usize = if (input.locator == null) 1 else 0;
+                args.items[index] = try absolute(a, init.io, args.items[index]);
+                try Agent.validateFiles(init.io, &.{args.items[index]});
+            } else try Agent.validateFiles(init.io, input.files);
+        },
+        .download => {
             const index: usize = if (input.locator == null) 1 else 0;
             args.items[index] = try absolute(a, init.io, args.items[index]);
         },

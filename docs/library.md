@@ -273,3 +273,8 @@ exported as `agent.protocol_methods`; `agent.validateProtocol` can preflight it.
 Keep the page and its allocator alive until deinit. `Diagnostics` adds sequence
 step reports and input-release status. The sequence file format belongs to the
 CLI; it does not add a host runtime to the library.
+
+`agent.Page.uploadFiles(query, filenames)` validates 1–64 regular readable paths
+and the strict file control, then replaces its selection in one CDP operation.
+`upload(query, filename)` delegates to it and remains source compatible. Paths
+resolve relative to the library caller; `agent.validateFiles` supports preflight.

@@ -21,6 +21,13 @@ test "independent consumer launches and evaluates" {
     _ = try command.protocol("Page.getLayoutMetrics", try J.parse(arena.allocator(), "{}"));
     try command.content("<div id=from style='width:50px;height:50px'>From</div><div id=to style='width:50px;height:50px'>To</div>");
     try command.drag(.{ .selector = "#from" }, .{ .selector = "#to" }, 0, 2);
+    const first = try arena.allocator().print("{s}/first.txt", .{browser.profile});
+    const second = try arena.allocator().print("{s}/second.txt", .{browser.profile});
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = first, .data = "first" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = second, .data = "second" });
+    try command.content("<input type=file multiple hidden>");
+    try command.uploadFiles(.{ .selector = "input" }, &.{ first, second });
+    try std.testing.expectEqual(@as(i64, 2), J.number(try command.eval("document.querySelector('input').files.length")));
     var connection = try Agent.Connection.connect(arena.allocator(), std.testing.io, try arena.allocator().print("http://127.0.0.1:{d}", .{browser.client.port}));
     defer connection.disconnect();
     try std.testing.expect((try connection.tabs()).array.items.len > 0);

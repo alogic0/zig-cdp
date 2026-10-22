@@ -471,3 +471,22 @@ input is also released at successful sequence completion; use a sequence to
 hold input between calls. Endpoint SIGINT/SIGTERM cancels and performs this
 cleanup. Disconnecting an owned drag/sequence client cancels its in-flight work
 and releases input. Inspect page state and step reports before retrying a write.
+
+
+## Multiple-file upload
+
+```sh
+zig-cdp --endpoint "$endpoint" upload --tab "$tab_id" --selector 'input[type=file]' \
+  --file './first file.txt' --file './другий файл.txt'
+```
+
+Repeat `--file` for 1–64 regular readable files, at most 32 KiB of total path
+text. Paths resolve in the invoking client's working directory. The complete
+list is validated before changing the control; one `DOM.setFileInputFiles` call
+replaces its existing selection, preserving supplied order. Hidden file inputs
+are supported; disabled inputs, non-file controls and ambiguous locators fail.
+More than one file requires the control's `multiple` attribute. Positional
+`upload CSS PATH` and `upload LOCATOR PATH` remain supported; do not mix positional
+files with `--file`. Sequence upload steps accept a `files` array instead of
+positional file arguments. Every sequence file list is checked before its first
+step; Chrome opens the files when the upload runs.

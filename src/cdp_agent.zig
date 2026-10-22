@@ -455,13 +455,25 @@ pub const Page = struct {
     }
 
     pub fn upload(self: *Page, query: Query, filename: []const u8) !void {
+        return self.uploadFiles(query, &.{filename});
+    }
+
+    pub fn uploadFiles(self: *Page, query: Query, filenames: []const []const u8) !void {
+        try validateFiles(self.io, filenames);
+        const paths = try self.a.alloc([]const u8, filenames.len);
+        const cwd = try std.Io.Dir.cwd().realPathFileAlloc(self.io, ".", self.a);
+        for (filenames, 0..) |filename, i| paths[i] = try std.fs.path.resolve(self.a, &.{ cwd, filename });
+        try validateFiles(self.io, paths);
         const id = try self.resolve(query);
         defer self.release(id);
         const info = try self.helper(id, "info", .{});
         if (J.boolean(J.field(info, "disabled"))) return error.ElementDisabled;
+        const file = J.field(try self.invoke(id, "function(){return {file:this.tagName==='INPUT'&&this.type==='file',multiple:this.multiple}}", .{}, true), "value");
+        if (!J.boolean(J.field(file, "file"))) return error.NotFileInput;
+        if (paths.len > 1 and !J.boolean(J.field(file, "multiple"))) return error.MultipleFilesNotAllowed;
         self.diagnostics.phase = .action;
         self.diagnostics.action = .possibly_dispatched;
-        _ = try self.command("DOM.setFileInputFiles", .{ .files = .{filename}, .objectId = id });
+        _ = try self.command("DOM.setFileInputFiles", .{ .files = paths, .objectId = id });
         self.diagnostics.action = .completed;
     }
 
@@ -600,6 +612,20 @@ fn decode(a: A, bytes: []const u8, base64: bool) ![]const u8 {
     const output = try a.alloc(u8, size);
     if (base64) try std.base64.standard.Decoder.decode(output, bytes) else @memcpy(output, bytes);
     return output;
+}
+
+/// Validate the entire file list before any input selection changes.
+pub fn validateFiles(io: std.Io, files: []const []const u8) !void {
+    if (files.len == 0 or files.len > 64) return error.FileCountExceeded;
+    var bytes: usize = 0;
+    for (files) |path| {
+        if (path.len == 0 or path.len > 32768 - bytes or std.mem.indexOfScalar(u8, path, 0) != null) return error.FilePathsTooLarge;
+        bytes += path.len;
+        const file = try std.Io.Dir.cwd().openFile(io, path, .{ .path_only = true });
+        defer file.close(io);
+        if ((try file.stat(io)).kind != .file) return error.NotRegularFile;
+        try std.Io.Dir.cwd().access(io, path, .{ .read = true });
+    }
 }
 
 pub fn call(a: A, socket: *cdp.WsSession, method: []const u8, params: anytype) !Value {

@@ -33,6 +33,13 @@ headed focus and the independent package consumer pass both profiles; existing
 agent acceptance and library checks pass Debug. Background input uses temporary
 focus emulation and compositor frames without desktop activation.
 
+Slice 4 accepts repeated upload files while preserving positional single-file
+calls. The client resolves paths and validates the full list; the library checks
+regular/readable files and the input's multiple/disabled state before one CDP
+selection update. Debug and ReleaseSafe upload and independent package checks
+pass, including order and exact contents, Unicode/space filenames, client cwd,
+invalid paths, cardinality/control rejection, compatibility and sequence preflight.
+
 ## Low-core session scheduling, October 21, 2026
 
 The first hosted CLI checks exposed a timeout on the initial session `status`

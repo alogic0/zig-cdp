@@ -23,6 +23,7 @@ pub const Request = struct {
     full_page: bool = false,
     background: bool = false,
     modern: bool = false,
+    files: []const []const u8 = &.{},
     params: ?V = null,
     destination: ?Agent.Query = null,
     hold_ms: u32 = 300,
@@ -36,6 +37,8 @@ const Op = enum { status, tabs, @"new-tab", @"switch-tab", @"close-tab", allow, 
 pub fn operation(input: Request) anyerror!Op {
     const op = std.meta.stringToEnum(Op, input.command) orelse return error.UnknownCommand;
     const argc = input.args.len;
+    if (input.files.len > 64) return error.FileCountExceeded;
+    if (input.files.len > 0 and op != .upload) return error.InvalidOption;
     if (op != .drag and (input.destination != null or input.hold_ms != 300 or input.steps != 12)) return error.InvalidOption;
     if (op == .drag) {
         if (input.hold_ms > 10000 or input.steps < 2 or input.steps > 120) return error.InvalidDrag;
@@ -75,7 +78,8 @@ pub fn operation(input: Request) anyerror!Op {
         try query.validate();
         const valid = switch (op) {
             .click, .text, .read, .wait, .drag => argc == 0,
-            .fill, .select, .press, .upload, .download => argc == 1,
+            .fill, .select, .press, .download => argc == 1,
+            .upload => argc == (if (input.files.len == 0) @as(usize, 1) else 0),
             else => return error.InvalidLocator,
         };
         if (!valid) return error.WrongArgumentCount;
@@ -85,7 +89,8 @@ pub fn operation(input: Request) anyerror!Op {
         .status, .tabs, .reload, .close, .read, .snapshot => argc == 0,
         .@"new-tab" => argc <= 1,
         .@"close-tab" => argc <= 1 and !(input.tab != null and argc != 0),
-        .fill, .select, .upload, .download => argc == 2,
+        .fill, .select, .download => argc == 2,
+        .upload => argc == (if (input.files.len == 0) @as(usize, 2) else 1),
         .protocol => argc == (if (input.params == null) @as(usize, 2) else 1),
         .drag => argc == (if (input.destination == null) @as(usize, 2) else 1),
         else => argc == 1,
@@ -299,7 +304,7 @@ pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
         .select => try page.select(query, input.args[index]),
         .press => try page.press(input.locator, input.args[0]),
         .wait => if (input.locator == null) try page.waitExpression(input.args[0]) else try page.wait(query, input.state),
-        .upload => try page.upload(query, input.args[index]),
+        .upload => try page.uploadFiles(query, if (input.files.len == 0) &.{input.args[index]} else input.files),
         .screenshot => {
             const result = try page.screenshot(input.args[0], input.full_page);
             return if (input.modern) result else .{ .string = input.args[0] };
@@ -326,6 +331,7 @@ pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
 fn executeSequence(page: *Agent.Page, raw: []const u8) anyerror!V {
     var parsed = try parseSequence(page.a, raw);
     defer parsed.deinit();
+    for (parsed.value.steps) |step| if (std.mem.eql(u8, step.command, "upload")) try Agent.validateFiles(page.io, if (step.files.len > 0) step.files else &.{step.args[if (step.locator == null) @as(usize, 1) else 0]});
     const reports = try page.a.alloc(Agent.Diagnostics.Step, parsed.value.steps.len);
     for (parsed.value.steps, 0..) |step, i| reports[i] = .{ .index = i, .command = try page.a.dupe(u8, step.command) };
     page.diagnostics.steps = reports;

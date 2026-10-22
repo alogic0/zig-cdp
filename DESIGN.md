@@ -162,3 +162,7 @@ emulation and compositor requests are scoped to the command; no desktop input
 is injected. The CLI validates bounded sequence documents before dispatch and
 uses one page, deadline and per-step diagnostic list. Browser/context methods
 remain outside its explicitly supported page-protocol set.
+
+Upload validates all bounded client-resolved paths before one selection update.
+The library repeats validation and verifies a file input with the required
+multiple attribute. Files and form submission remain consumer-owned.
