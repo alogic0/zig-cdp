@@ -25,7 +25,7 @@ pub fn json(a: A, value: anytype) ![]const u8 {
     return std.json.Stringify.valueAlloc(a, value, .{});
 }
 pub fn parse(a: A, bytes: []const u8) !V {
-    return std.json.parseFromSliceLeaky(V, a, bytes, .{ .allocate = .alloc_always });
+    return @import("cdp_json.zig").value(a, bytes);
 }
 pub fn val(a: A, value: anytype) !V {
     const bytes = try json(a, value);

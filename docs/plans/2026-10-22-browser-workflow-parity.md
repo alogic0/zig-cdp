@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 
-Status: implementation in progress; slices 1–4 delivered; integration checks pending
+Status: completed in zig-cdp 0.3.0; all five slices implemented and verified
 
 Baseline: zig-cdp 0.2.0 at `30b60ef`, compared with the standalone Node CDP
 client at `71284ed` and its task-resolution workflow. This extends the completed
@@ -14,8 +14,13 @@ create task tabs, inspect and operate controls, capture errors and API responses
 perform a drag, upload several files, and disconnect without writing a Zig,
 Python, or Node controller for those operations.
 
-This document records the delivery contract. Slices 1–4 are implemented; command
-examples in later slices remain proposed until their checks pass.
+This document records the delivered contract. The
+[native workflow guide](../browser-workflow.md) contains the complete command
+sequence and adoption boundary. Debug and ReleaseSafe pass all ten CLI groups
+on one CPU, twelve library tests, the headed focus/resize gates and the
+independent exported package consumer. The expanded resource workload retains
+its original limits. Detailed results and the observed transient shutdown
+timeout are recorded in [CURRENT_STATUS.md](../../CURRENT_STATUS.md).
 
 ## What already works
 
@@ -227,8 +232,8 @@ Required implementation checks, using the compiler pinned in `.zigversion`:
 zig fmt --check src tests examples build.zig
 zig build test-cli test check example --summary all
 zig build test-cli test check example -Doptimize=ReleaseSafe --summary all
-zig build test-headed -Dheaded-window-manager=true --summary all
-zig build test-headed -Dheaded-window-manager=true -Doptimize=ReleaseSafe --summary all
+zig build test-headed test-focus -Dheaded-window-manager=true --summary all
+zig build test-headed test-focus -Dheaded-window-manager=true -Doptimize=ReleaseSafe --summary all
 git diff --check
 ```
 

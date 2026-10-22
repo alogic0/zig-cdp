@@ -40,6 +40,9 @@ Protocol frames and queued messages are bounded; malformed replies and wire
 failures seal the affected connection. The initial extraction retains the finite
 behavior and limits documented in the library guide. It does not claim exhaustive
 CDP, accessibility, browser-version, or cross-engine compatibility.
+Socket reads tolerate early poll timeouts without extending their absolute
+deadline. Decoded JSON replaces unpaired UTF-16 escapes from Chrome previews
+with U+FFFD; raw protocol bytes and valid surrogate pairs remain unchanged.
 
 ## CLI session owner
 

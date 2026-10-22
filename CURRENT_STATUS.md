@@ -1,6 +1,6 @@
 # Current delivery
 
-## Browser workflow parity, October 22, 2026
+## Browser workflow parity completed (0.3.0), October 22, 2026
 
 Slice 1 adds background tab creation and owned CLI selection, passive attachment
 and recovery, and explicit library tab options with compatible foreground
@@ -10,7 +10,7 @@ fixture uses two non-overlapping windows and checks native focus, selected-tab
 visibility, unsaved form state, geometry, input, both screenshot modes and
 recovery in owned and borrowed modes. Focus checks and the isolated package
 consumer pass Debug and ReleaseSafe; Debug library tests and ReleaseSafe
-endpoint acceptance pass. Remaining slices are tracked in the
+endpoint acceptance pass. All five slices are delivered in the
 [workflow parity plan](docs/plans/2026-10-22-browser-workflow-parity.md).
 
 Slice 2 delivers the independent finite observer with readiness, private
@@ -39,6 +39,46 @@ regular/readable files and the input's multiple/disabled state before one CDP
 selection update. Debug and ReleaseSafe upload and independent package checks
 pass, including order and exact contents, Unicode/space filenames, client cwd,
 invalid paths, cardinality/control rejection, compatibility and sequence preflight.
+
+Slice 5 delivers the [complete native workflow](docs/browser-workflow.md):
+background creation, observer readiness before navigation, semantic inspection,
+fill/save with the actual correlated POST response and rendered result, held
+drag, multiple upload, download, reload, screenshot and disconnect. Both ownership
+modes preserve sentinel state, viewport and external browser/profile; the headed
+fixture also preserves native foreground focus. Owned sequences preflight every
+navigation origin and scope unload permission to explicit open/reload steps.
+Consumer workflows remain separate; this repository does not change their tool.
+
+Integration exposed and fixed three edge cases without relaxing test thresholds:
+stalled compositor samples could hide running geometry animations; Chrome's
+truncated previews could contain unpaired UTF-16 escapes; and early I/O poll
+timeouts could incorrectly fail a live observer. Geometry checks exclude purely
+color animations, JSON decoding preserves valid pairs and raw wire bytes, and
+read retries retain their absolute deadline. Dedicated regression checks cover
+each case, including Unicode exception captures and deterministic early expiry.
+
+Final verification with Zig 0.17.0 and Chrome 155.0.8059.84:
+
+| Check | Debug | ReleaseSafe |
+| --- | --- | --- |
+| Full CLI suite restricted to one CPU | 10/10 groups passed | 10/10 groups passed |
+| Library tests | 12/12 passed | 12/12 passed |
+| Combined CLI, library, compile and example command | 11/11 build steps passed | 11/11 build steps passed |
+| Headed resize and complete background-focus workflow | 7/7 build steps passed | 7/7 build steps passed |
+| Independent exported package consumer, private cache | 1/1 passed | 1/1 passed |
+| Resource owner RSS bytes | 9,121,792 → 9,203,712 | 3,244,032 → 3,608,576 |
+| Resource owner descriptors | 7 → 7 | 7 → 7 |
+
+The unchanged 24-command warmup, 720 inspections, 36 tab cycles, 32 MiB RSS
+growth ceiling and descriptor ceiling now include twelve sequences and one
+independent observer. These measurements bound the tested CLI owner workload,
+not Chrome memory or indefinite observation. Format, documentation links and
+diff checks pass; the installed repository executable reports 0.3.0.
+
+An earlier single-CPU ReleaseSafe run exceeded the lifecycle fixture's ten-second
+owner-shutdown wait. Its focused rerun and both final full runs passed; shutdown
+code and that threshold were not changed. The intermittent observation is
+retained here rather than attributed to an unproven fix.
 
 ## Low-core session scheduling, October 21, 2026
 

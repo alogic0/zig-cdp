@@ -88,7 +88,7 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
         return 0;
     }
     if (std.mem.eql(u8, first, "--version")) {
-        try std.Io.File.stdout().writeStreamingAll(init.io, "zig-cdp 0.2.0\n");
+        try std.Io.File.stdout().writeStreamingAll(init.io, "zig-cdp 0.3.0\n");
         return 0;
     }
     const borrowed = std.mem.eql(u8, first, "--endpoint");

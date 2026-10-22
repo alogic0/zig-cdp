@@ -278,3 +278,8 @@ CLI; it does not add a host runtime to the library.
 and the strict file control, then replaces its selection in one CDP operation.
 `upload(query, filename)` delegates to it and remains source compatible. Paths
 resolve relative to the library caller; `agent.validateFiles` supports preflight.
+
+Decoded CDP JSON replaces unpaired UTF-16 escapes with U+FFFD, including Chrome
+previews truncated inside an emoji. Valid surrogate pairs and literal escapes
+are preserved; raw WebSocket messages are unchanged. Other JSON syntax errors
+still fail the operation.

@@ -99,13 +99,21 @@ pub const WsSession = struct {
     fn readExact(self: *WsSession, bytes: []u8) !void {
         var offset: usize = 0;
         while (offset < bytes.len) {
-            const remaining = if (self.deadline_ms) |end| end - @as(i64, @intCast(std.Io.Clock.awake.now(self.io).toMilliseconds())) else 30_000;
-            if (remaining <= 0) return error.Timeout;
+            const idle_end = @as(i64, @intCast(std.Io.Clock.awake.now(self.io).toMilliseconds())) + 30_000;
+            const end = @min(self.deadline_ms orelse idle_end, idle_end);
             var buffers = [_][]u8{bytes[offset..]};
-            const result = try self.io.operateTimeout(.{ .net_read = .{
-                .socket_handle = self.stream.socket.handle,
-                .data = &buffers,
-            } }, .{ .duration = .{ .raw = .fromMilliseconds(@min(remaining, 30_000)), .clock = .awake } });
+            const result = poll: while (true) {
+                if (std.Io.Clock.awake.now(self.io).toMilliseconds() >= end) return error.Timeout;
+                break :poll self.io.operateTimeout(.{ .net_read = .{
+                    .socket_handle = self.stream.socket.handle,
+                    .data = &buffers,
+                } }, .{ .deadline = .{ .raw = .{ .nanoseconds = @as(i96, end) * std.time.ns_per_ms }, .clock = .awake } }) catch |err| {
+                    // The I/O runtime permits early poll timeouts. Retry only
+                    // the read, retaining the original absolute deadline.
+                    if (err == error.Timeout) continue :poll;
+                    return err;
+                };
+            };
             const n = (try result.net_read).data_len;
             if (n == 0) return error.ConnectionClosed;
             offset += n;
@@ -196,7 +204,7 @@ pub const WsSession = struct {
     }
 
     pub fn responseId(alloc: std.mem.Allocator, raw: []const u8) !?u32 {
-        const parsed = try std.json.parseFromSlice(std.json.Value, alloc, raw, .{});
+        const parsed = try @import("cdp_json.zig").parsed(alloc, raw);
         defer parsed.deinit();
         if (parsed.value != .object) return error.InvalidProtocolReply;
         const id = parsed.value.object.get("id") orelse return null;
@@ -257,7 +265,7 @@ pub const WsSession = struct {
         const raw_reply = try self.evaluate(expression);
         defer self.alloc.free(raw_reply);
 
-        const parsed = try std.json.parseFromSlice(std.json.Value, self.alloc, raw_reply, .{ .allocate = .alloc_always });
+        const parsed = try @import("cdp_json.zig").parsed(self.alloc, raw_reply);
         return parsed;
     }
 
@@ -341,7 +349,7 @@ pub const WsSession = struct {
     }
 
     fn extractResultString(alloc: std.mem.Allocator, reply: []const u8) ?[]const u8 {
-        const parsed = std.json.parseFromSlice(std.json.Value, alloc, reply, .{}) catch return null;
+        const parsed = @import("cdp_json.zig").parsed(alloc, reply) catch return null;
         defer parsed.deinit();
 
         if (parsed.value != .object) return null;
@@ -512,7 +520,7 @@ pub const WsSession = struct {
         const reply = try self.call("Runtime.getHeapUsage", null);
         defer self.alloc.free(reply);
 
-        const parsed = try std.json.parseFromSlice(std.json.Value, self.alloc, reply, .{});
+        const parsed = try @import("cdp_json.zig").parsed(self.alloc, reply);
         defer parsed.deinit();
 
         const result = parsed.value.object.get("result") orelse return error.MissingResult;
@@ -526,7 +534,7 @@ pub const WsSession = struct {
         const reply = try self.call("Memory.getDOMCounters", null);
         defer self.alloc.free(reply);
 
-        const parsed = try std.json.parseFromSlice(std.json.Value, self.alloc, reply, .{});
+        const parsed = try @import("cdp_json.zig").parsed(self.alloc, reply);
         defer parsed.deinit();
 
         const result = parsed.value.object.get("result") orelse return error.MissingResult;
@@ -603,7 +611,7 @@ pub const CdpClient = struct {
     pub fn connectBrowser(self: CdpClient) !WsSession {
         const body = try self.http("GET", "/json/version");
         defer self.alloc.free(body);
-        const parsed = std.json.parseFromSlice(std.json.Value, self.alloc, body, .{}) catch return error.InvalidProtocolReply;
+        const parsed = @import("cdp_json.zig").parsed(self.alloc, body) catch return error.InvalidProtocolReply;
         defer parsed.deinit();
         if (parsed.value != .object) return error.InvalidProtocolReply;
         const url = parsed.value.object.get("webSocketDebuggerUrl") orelse return error.InvalidProtocolReply;
@@ -615,7 +623,7 @@ pub const CdpClient = struct {
         const body = try self.http("GET", "/json/list");
         defer self.alloc.free(body);
 
-        const parsed = try std.json.parseFromSlice(std.json.Value, self.alloc, body, .{});
+        const parsed = try @import("cdp_json.zig").parsed(self.alloc, body);
         defer parsed.deinit();
 
         var targets: std.ArrayList(Target) = .empty;
@@ -646,7 +654,7 @@ pub const CdpClient = struct {
         const body = try self.http("PUT", path);
         defer self.alloc.free(body);
 
-        const parsed = try std.json.parseFromSlice(std.json.Value, self.alloc, body, .{});
+        const parsed = try @import("cdp_json.zig").parsed(self.alloc, body);
         defer parsed.deinit();
 
         const id = if (parsed.value.object.get("id")) |v| try self.alloc.dupe(u8, v.string) else "";
@@ -774,4 +782,44 @@ test "queued wire messages survive allocator replacement" {
     try std.testing.expectEqualStrings("queued response", socket.pending.items[0]);
     try std.testing.expectEqual(@as(usize, "queued response".len), socket.pending_bytes);
     try socket.pending.append(std.testing.allocator, try std.testing.allocator.dupe(u8, "another response"));
+}
+
+test "wire reads tolerate early poll expiry without extending the deadline" {
+    const Fake = struct {
+        time_ms: i64 = 0,
+        polls: usize = 0,
+        expire: bool = false,
+        fn now(ctx: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            return .{ .nanoseconds = @as(i96, self.time_ms) * std.time.ns_per_ms };
+        }
+        fn awaitPoll(ctx: ?*anyopaque, batch: *std.Io.Batch, timeout: std.Io.Timeout) std.Io.Batch.AwaitConcurrentError!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.polls += 1;
+            if (self.polls == 1 or self.expire) {
+                self.time_ms = @intCast(timeout.deadline.raw.toMilliseconds() - @as(i64, if (self.polls == 1) 1 else 0));
+                return error.Timeout;
+            }
+            const index = batch.submitted.head;
+            const slot = &batch.storage[index.toIndex()];
+            slot.submission.operation.net_read.data[0][0] = 'x';
+            slot.* = .{ .completion = .{ .node = .{ .next = .none }, .result = .{ .net_read = .{ .data_len = 1, .control_len = 0 } } } };
+            batch.submitted = .{ .head = .none, .tail = .none };
+            batch.completed = .{ .head = index, .tail = index };
+        }
+    };
+    var fake: Fake = .{};
+    var vtable = std.testing.io.vtable.*;
+    vtable.now = Fake.now;
+    vtable.batchAwaitConcurrent = Fake.awaitPoll;
+    var socket: WsSession = .{ .alloc = std.testing.allocator, .io = .{ .userdata = &fake, .vtable = &vtable }, .stream = undefined, .deadline_ms = 10 };
+    socket.stream.socket.handle = -1;
+    var byte: [1]u8 = undefined;
+    try socket.readExact(&byte);
+    try std.testing.expectEqualStrings("x", &byte);
+    try std.testing.expectEqual(@as(usize, 2), fake.polls);
+    fake = .{ .expire = true };
+    try std.testing.expectError(error.Timeout, socket.readExact(&byte));
+    try std.testing.expectEqual(@as(usize, 2), fake.polls);
+    try std.testing.expectEqual(@as(i64, 10), fake.time_ms);
 }

@@ -84,6 +84,17 @@ pub fn run(c: H.Context) !void {
         try unchanged(c, window, sentinel, original);
         try H.equal(try original.result(&.{ "eval", "({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})" }), geometry);
     }
+    var fixture: @import("cli_fixture.zig").Fixture = .{};
+    try fixture.start(c);
+    defer fixture.deinit();
+    const origin = try fixture.origin(c);
+    _ = try own.result(&.{ "allow", origin });
+    for ([_]H.Client{ own, endpoint }, 0..) |client, i| {
+        const task = try @import("cli_workflow.zig").exercise(client, origin, try c.a.print("headed-complete-{d}", .{i}));
+        try unchanged(c, window, sentinel, original);
+        try H.equal(try original.result(&.{ "eval", "({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})" }), geometry);
+        _ = try own.result(&.{ "close-tab", task });
+    }
     _ = try own.result(&.{ "allow", "http://127.0.0.1:1" });
     _ = try own.failure(&.{ "new-tab", "http://127.0.0.1:1/", "--background" }, "NavigationFailed");
     try unchanged(c, window, sentinel, original);

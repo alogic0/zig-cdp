@@ -39,6 +39,7 @@ fn exercise(client: H.Client, origin: []const u8, name: []const u8) !void {
     var observer = try start(client, name, &.{ "--out", path, "--duration", "12000", "--body-url", url, "--body-method", "POST" });
     defer observer.deinit();
     try ready(c, &observer);
+    try H.S.files.expectMode(c.io, .{ .path = path, .mode = 0o600 });
     const geometry = try client.result(&.{ "eval", "({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})" });
     _ = try client.result(&.{ "open", origin });
     _ = try client.result(&.{ "eval", "console.log('observed',42); new Promise(resolve=>setTimeout(()=>{resolve(true);throw new Error('fixture exception')},0))" });
@@ -117,6 +118,19 @@ pub fn run(c: H.Context) !void {
     _ = try finish(c, &small, false);
     const small_bytes = try c.read(try c.path("small-body.jsonl"));
     try H.check(std.mem.indexOf(u8, small_bytes, "oversized") != null, "oversized body is explicit");
+    var unicode = try start(page, "unicode-truncation", &.{ "--out", try c.path("unicode.jsonl"), "--duration", "3000", "--events", "exceptions" });
+    defer unicode.deinit();
+    try ready(c, &unicode);
+    _ = try page.result(&.{ "eval", "new Promise(resolve=>setTimeout(()=>{resolve(true);throw new Error('🧭'.repeat(2000))},0))" });
+    const unicode_summary = try finish(c, &unicode, false);
+    if ((try H.field(unicode_summary, "truncated")).integer == 0) {
+        std.debug.print("unicode capture summary: {s}\n", .{try c.json(unicode_summary)});
+        H.printLog(c, try c.path("unicode.jsonl"));
+    }
+    try H.check((try H.field(unicode_summary, "truncated")).integer > 0, "exception truncation is explicit");
+    const unicode_line = try c.read(try c.path("unicode.jsonl"));
+    try H.check(std.unicode.utf8ValidateSlice(unicode_line), "truncation preserves UTF-8");
+    _ = try c.parse(std.mem.trim(u8, unicode_line, "\n"));
     for ([_][]const u8{ "--max-events", "--max-bytes" }, [_][]const u8{ "1", "256" }, 0..) |option, value, n| {
         var overflow = try start(page, try c.a.print("overflow{d}", .{n}), &.{ "--out", try c.path(try c.a.print("overflow{d}.jsonl", .{n})), "--duration", "5000", option, value });
         defer overflow.deinit();

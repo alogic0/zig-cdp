@@ -292,7 +292,7 @@ pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
         .drag => try page.drag(query, input.destination orelse .{ .selector = input.args[1] }, input.hold_ms, input.steps),
         .protocol => return page.protocol(input.args[0], if (input.params) |params| try J.parse(page.a, try J.json(page.a, params)) else try J.parse(page.a, input.args[1])),
         .pause => try page.delay(try std.fmt.parseInt(u32, input.args[0], 10)),
-        .sequence => return executeSequence(page, input.args[0]),
+        .sequence => return executeSequence(page, input.args[0], null),
         .snapshot => return page.snapshot(input.limit),
         .read => return page.read(input.locator, input.limit),
         .text => return page.text(query),
@@ -328,7 +328,7 @@ pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
     return .{ .bool = true };
 }
 
-fn executeSequence(page: *Agent.Page, raw: []const u8) anyerror!V {
+fn executeSequence(page: *Agent.Page, raw: []const u8, unload: ?*bool) anyerror!V {
     var parsed = try parseSequence(page.a, raw);
     defer parsed.deinit();
     for (parsed.value.steps) |step| if (std.mem.eql(u8, step.command, "upload")) try Agent.validateFiles(page.io, if (step.files.len > 0) step.files else &.{step.args[if (step.locator == null) @as(usize, 1) else 0]});
@@ -342,6 +342,13 @@ fn executeSequence(page: *Agent.Page, raw: []const u8) anyerror!V {
         page.diagnostics.step = i;
         page.diagnostics.action = .not_started;
         page.diagnostics.match_count = null;
+        const previous_unload = if (unload) |flag| flag.* else false;
+        if (unload) |flag| if (std.mem.eql(u8, step.command, "open") or std.mem.eql(u8, step.command, "reload")) {
+            flag.* = true;
+        };
+        defer if (unload) |flag| {
+            flag.* = previous_unload;
+        };
         const result = executePage(page, step) catch |err| {
             reports[i].action = page.diagnostics.action;
             reports[i].err = @errorName(err);
@@ -608,12 +615,10 @@ const State = struct {
             defer sequence.deinit();
             for (sequence.value.steps) |step| if (std.mem.eql(u8, step.command, "open") and !self.permitted(step.args[0])) return error.OriginNotAllowed;
         }
-        const previous_unload = p.allow_unload;
-        if (op == .sequence) p.allow_unload = true;
-        defer p.allow_unload = previous_unload;
         var page = try self.commandPage(p, diagnostics);
         defer page.deinit();
         switch (op) {
+            .sequence => return executeSequence(&page, input.args[0], &p.allow_unload),
             .status => return J.val(a, .{ .browser = self.browser.version, .url = J.str(try page.eval("location.href")), .tab_id = p.target, .origins = self.origins.items, .timeout_ms = self.timeout_ms, .profile = self.browser.profile, .persistent_profile = self.browser.persistent_profile, .port = self.browser.client.port }),
             .open => {
                 const url = J.str(try page.eval(try a.print("new URL({s}).href", .{try J.json(a, input.args[0])})));

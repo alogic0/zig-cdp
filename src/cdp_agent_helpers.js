@@ -15,6 +15,14 @@
   },
   point(previous) {
     if (this.matches(':disabled') || this.closest('[aria-disabled="true"],[inert]')) return {reason:'disabled'};
+    // A stalled compositor can return identical bounds while a CSS geometry
+    // animation is running. Reject it even when two wall-clock samples match.
+    const geometry = /^(transform|translate|rotate|scale|perspective|offsetPath|offsetDistance|offsetRotate|top|right|bottom|left|width|height|minWidth|maxWidth|minHeight|maxHeight|margin|padding|fontSize|lineHeight|letterSpacing|wordSpacing|flexBasis|gridTemplate)/;
+    for (let n=this; n; n=n.parentElement) {
+      for (const animation of n.getAnimations()) {
+        if (animation.playState==='running' && animation.effect?.getKeyframes().some(frame=>Object.keys(frame).some(key=>geometry.test(key)))) return {reason:'moving'};
+      }
+    }
     this.scrollIntoView({block:'center', inline:'center'});
     const r = this.getBoundingClientRect(), style = getComputedStyle(this);
     if (previous?.bounds && ['x','y','width','height'].some(key => Math.abs(previous.bounds[key]-r[key]) > 0.5)) return {reason:'moving'};

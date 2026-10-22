@@ -215,8 +215,10 @@ const Capture = struct {
         } else if (eq(method, "Runtime.exceptionThrown") and selected(self.options.events, "exceptions")) {
             const d = J.field(p, "exceptionDetails");
             const text = J.str(J.field(J.field(d, "exception"), "description"));
-            if (text.len > 4096) self.truncated += 1;
-            try self.write(a, "exception", .{ .text = text[0..@min(text.len, 4096)], .message = J.field(d, "text"), .url = try safeUrl(a, J.str(J.field(d, "url"))), .line = J.field(d, "lineNumber"), .column = J.field(d, "columnNumber"), .timestamp = J.field(p, "timestamp"), .context = J.field(d, "executionContextId") });
+            var length = @min(text.len, 4096);
+            while (length > 0 and !std.unicode.utf8ValidateSlice(text[0..length])) length -= 1;
+            if (length < text.len) self.truncated += 1;
+            try self.write(a, "exception", .{ .text = text[0..length], .truncated = length < text.len, .message = J.field(d, "text"), .url = try safeUrl(a, J.str(J.field(d, "url"))), .line = J.field(d, "lineNumber"), .column = J.field(d, "columnNumber"), .timestamp = J.field(p, "timestamp"), .context = J.field(d, "executionContextId") });
         } else if (std.mem.startsWith(u8, method, "Network.") and selected(self.options.events, "network")) {
             const id = J.str(J.field(p, "requestId"));
             if (id.len == 0 or id.len > 256) return;

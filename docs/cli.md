@@ -472,7 +472,6 @@ hold input between calls. Endpoint SIGINT/SIGTERM cancels and performs this
 cleanup. Disconnecting an owned drag/sequence client cancels its in-flight work
 and releases input. Inspect page state and step reports before retrying a write.
 
-
 ## Multiple-file upload
 
 ```sh
@@ -490,3 +489,6 @@ More than one file requires the control's `multiple` attribute. Positional
 files with `--file`. Sequence upload steps accept a `files` array instead of
 positional file arguments. Every sequence file list is checked before its first
 step; Chrome opens the files when the upload runs.
+
+See the [complete native browser workflow](browser-workflow.md) for the combined
+scenario, verification commands and consumer adoption boundary.

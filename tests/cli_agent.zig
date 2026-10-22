@@ -54,6 +54,10 @@ pub fn exercise(client: H.Client, download_url: ?[]const u8) !void {
     const moving = try client.failure(&.{ "click", "--selector", "#moving", "--timeout", "350" }, "ElementNotStable");
     try H.equal(try H.field(try H.field(moving, "error"), "action"), "not_started");
     _ = try client.result(&.{ "eval", "document.querySelector('#moving').remove(); true" });
+    _ = try client.result(&.{ "eval", "document.body.insertAdjacentHTML('beforeend', `<style>@keyframes shade {from{color:red} to{color:blue}}</style><button id=color style='animation:shade 1s linear infinite' onclick='this.textContent=\"clicked\"'>Color</button>`); true" });
+    _ = try client.result(&.{ "click", "--selector", "#color", "--timeout", "1000" });
+    try client.expect(&.{ "text", "#color" }, "clicked");
+    _ = try client.result(&.{ "eval", "document.querySelector('#color').remove(); true" });
     _ = try client.result(&.{ "wait", "--selector", "#hidden", "--state", "hidden" });
     _ = try client.result(&.{ "wait", "--selector", "#missing", "--state", "detached" });
     _ = try client.result(&.{ "wait", "--selector", "#name", "--state", "visible" });

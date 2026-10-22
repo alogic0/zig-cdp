@@ -9,7 +9,7 @@ ownership comes from [`zig-process`](https://github.com/alogic0/zig-process),
 downloaded automatically at a pinned revision and verified by its package hash.
 Node.js and a browser-driver service are not required.
 
-Version **0.2.0**, licensed under the [MIT License](LICENSE).
+Version **0.3.0**, licensed under the [MIT License](LICENSE).
 
 ## Install
 
@@ -67,6 +67,9 @@ input and bounded action sequences. See [the sequence format and cleanup contrac
 
 For multiple uploads, repeat `--file PATH` on `upload`; the complete list is
 validated before replacing the file input selection.
+
+The [complete native workflow](docs/browser-workflow.md) includes endpoint
+discovery, observer readiness, response verification and copyable commands.
 
 ### Start and retain a session
 
@@ -262,7 +265,9 @@ processes. Building, using and testing require no Python interpreter. It uses
 pinned shared HTTP fixtures and test-support packages and always executes its
 browser scenarios, even when compilation is cached. To run one group, use
 `zig build test-cli -- --case resources`; the groups are `contract`, `agent`,
-`lifecycle`, `discovery`, `endpoint`, and `resources`.
+`lifecycle`, `discovery`, `endpoint`, `resources`, `workflow`, `upload`, `input`,
+and `observe`. The separate `test-focus` gate runs the `focus` group with Xvfb,
+Openbox and `xprop` to observe native focus throughout the background workflow.
 `test-headed` requires `xvfb-run` and tests
 window resizing on a separate virtual X display. The independent package check
 runs with `zig build test` from `tests/package` in either optimization profile.

@@ -109,5 +109,17 @@ pub fn run(c: H.Context) !void {
     try closed.failed(5000);
     const close_reply = try c.parse(try c.read(closed.out_path));
     try H.equal(try H.field(try H.field(close_reply, "error"), "input_release"), "incomplete");
+    var fixture: @import("cli_fixture.zig").Fixture = .{};
+    try fixture.start(c);
+    defer fixture.deinit();
+    const origin = try fixture.origin(c);
+    const nav_sequence = try c.path("navigation-sequence.json");
+    try c.write(nav_sequence, try c.json(.{ .version = 1, .steps = .{ .{ .command = "fill", .args = .{ "#name", "not allowed" } }, .{ .command = "open", .args = .{origin} } } }));
+    _ = try own.failure(&.{ "sequence", "--file", nav_sequence }, "OriginNotAllowed");
+    try own.expect(&.{ "eval", "document.querySelector('#name').value" }, "");
+    _ = try own.result(&.{ "allow", origin });
+    try c.write(nav_sequence, try c.json(.{ .version = 1, .steps = .{ .{ .command = "open", .args = .{origin} }, .{ .command = "reload" }, .{ .command = "read" } } }));
+    _ = try own.result(&.{ "sequence", "--file", nav_sequence });
+    try own.expect(&.{ "text", "#message" }, "Local page");
     try owner.close();
 }
