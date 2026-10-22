@@ -74,6 +74,9 @@ discovery, observer readiness, response verification and copyable commands.
 Use `frames --tab ID` to discover embedded documents, then pass `--frame FRAME_ID`
 to page actions. Same-origin, cross-origin and nested frames use the same CLI
 commands; [frame scope and limits](docs/cli.md#frames) explain navigation and input.
+Use `shadow-roots` to discover open/closed author components, then repeat
+`--shadow HOST_CSS` to scope the same actions to a nested component.
+[Shadow scope](docs/cli.md#shadow-roots) also works inside selected frames.
 
 ### Start and retain a session
 

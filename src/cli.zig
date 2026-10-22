@@ -14,6 +14,7 @@ const help =
     \\                                Own a persistent browser (foreground)
     \\status                           Browser version, URL, and session state
     \\tabs                             List tab IDs, titles, URLs, and selection
+    \\shadow-roots                     Discover author shadow host paths and types
     \\frames                           List frame IDs, parents, names and URLs
     \\new-tab [URL] [--background]     Create and select a tab (default blank)
     \\switch-tab ID [--background]    Select a tab; background is session-only
@@ -50,7 +51,7 @@ const help =
     \\
     \\LOCATOR: --selector CSS | --role ROLE [--name NAME] | --text TEXT
     \\Element commands also accept LOCATOR instead of positional CSS.
-    \\Options: --tab ID, --frame ID, --timeout MS, --limit BYTES, --state STATE
+    \\Options: --tab ID, --frame ID, --shadow HOST_CSS (repeatable), --timeout MS, --limit BYTES, --state STATE
     \\         --value TEXT | --value-file PATH|- (fill/select)
     \\         --script PATH|- (eval), --key KEY (press)
     \\         --full-page | --viewport (screenshot), --out PATH
@@ -135,6 +136,7 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
     }
     input.* = .{ .command = command };
     var args: std.ArrayList([]const u8) = .empty;
+    var shadows: std.ArrayList([]const u8) = .empty;
     var files: std.ArrayList([]const u8) = .empty;
     var output: ?[]const u8 = null;
     var literal = false;
@@ -183,6 +185,9 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
                 if (value_supplied or !(std.mem.eql(u8, command, "protocol") and std.mem.eql(u8, arg, "--params") or std.mem.eql(u8, command, "sequence") and std.mem.eql(u8, arg, "--file"))) return error.InvalidOption;
                 value_supplied = true;
                 try args.append(a, try readInput(a, init.io, value));
+            } else if (std.mem.eql(u8, arg, "--shadow")) {
+                if (shadows.items.len == 16) return error.ShadowDepthExceeded;
+                try shadows.append(a, value);
             } else if (std.mem.eql(u8, arg, "--frame")) {
                 if (input.frame != null) return error.InvalidOption;
                 input.frame = value;
@@ -193,7 +198,7 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
                 if (input.timeout_ms != null) return error.InvalidOption;
                 input.timeout_ms = std.fmt.parseInt(u32, value, 10) catch return error.InvalidTimeout;
             } else if (std.mem.eql(u8, arg, "--limit")) {
-                if (!std.mem.eql(u8, command, "read") and !std.mem.eql(u8, command, "snapshot")) return error.InvalidOption;
+                if (!std.mem.eql(u8, command, "read") and !std.mem.eql(u8, command, "snapshot") and !std.mem.eql(u8, command, "shadow-roots")) return error.InvalidOption;
                 input.limit = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit;
             } else if (std.mem.eql(u8, arg, "--state")) {
                 if (!std.mem.eql(u8, command, "wait")) return error.InvalidOption;
@@ -240,6 +245,7 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
         args.items[0] = try J.json(a, sequence.value);
     }
     input.files = files.items;
+    input.shadows = shadows.items;
     input.args = args.items;
     const op = try session.operation(input.*);
     switch (op) {

@@ -180,3 +180,10 @@ membership in the tab's frame hierarchy; it never selects unrelated page targets
 Named pointer input maps frame-local geometry through ancestor owners, checks
 occlusion, and dispatches at the root viewport. Raw input remains explicit CDP
 coordinates. Browser/tab lifecycle and screenshots retain top-level scope.
+
+Author shadow roots use explicit host chains and CDP DOM remote objects,
+including closed roots; no page instrumentation is installed. Normal locators
+resolve a fresh chain per operation/poll. AX candidates are filtered by root and
+assigned-slot membership. Input checks walk composed ancestors and test each
+retargeting boundary. Discovery walks bounded DOM descriptions, excludes
+user-agent roots and never crosses a frame's contentDocument implicitly.

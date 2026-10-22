@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 
-Status: implementation in progress; shutdown and frame slices verified
+Status: implementation in progress; shutdown, frame and shadow slices verified
 
 Baseline: zig-cdp 0.3.0, `30939e3`. This closes the deferred coverage described
 in the browser-workflow parity plan and investigates its intermittent shutdown

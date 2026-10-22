@@ -28,6 +28,14 @@ context reuse from redirecting an operation. Debug and ReleaseSafe focused
 checks and the independent exported package consumer pass; the integration
 headed/resource matrix remains pending with the shadow and worker slices.
 
+
+Shadow selection now supports repeated `--shadow` host chains, open/closed
+author roots and `shadow-roots` discovery. CSS/text/AX lookup, snapshots,
+rendered reads and named actions share that scope, including assigned slots.
+Native fixtures passed in Debug and ReleaseSafe across both ownership modes
+and cross-site frames: trusted input/drag, uploads, root isolation, closed-slot
+inert state, occlusion/motion, stale/replaced hosts and sequence preflight.
+The independent exported package consumer passed both profiles.
 ## Browser workflow parity completed (0.3.0), October 22, 2026
 
 Slice 1 adds background tab creation and owned CLI selection, passive attachment

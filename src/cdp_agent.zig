@@ -3,6 +3,7 @@ const std = @import("std");
 const cdp = @import("cdp.zig");
 const J = @import("cdp_journey.zig");
 const A = std.mem.Allocator;
+const Shadow = @import("cdp_shadow.zig");
 const Input = @import("cdp_input.zig");
 pub const validateProtocol = Input.validate;
 pub const protocol_methods = Input.methods;
@@ -114,6 +115,7 @@ pub const Page = struct {
     targets: ?*cdp.target_tree.Tree = null,
     owns_targets: bool = false,
     frame: ?[]const u8 = null,
+    shadows: []const []const u8 = &.{},
 
     pub fn init(a: A, io: std.Io, socket: *cdp.WsSession, timeout_ms: u32, diagnostics: *Diagnostics) !Page {
         var random: [8]u8 = undefined;
@@ -189,6 +191,14 @@ pub const Page = struct {
         };
         return error.FrameNotFound;
     }
+    pub fn setShadows(self: *Page, hosts: []const []const u8) !void {
+        if (self.input.held()) return error.HeldInputScopeChange;
+        try Shadow.validate(hosts);
+        self.shadows = hosts;
+    }
+    pub fn shadowRoots(self: *Page, limit: usize) !Value {
+        return Shadow.discover(self, limit);
+    }
     fn frameContext(self: *Page) !*cdp.target_tree.Context {
         const tree = try self.ensureTargets();
         if (tree.context(self.frame.?)) |ctx| return ctx;
@@ -248,8 +258,10 @@ pub const Page = struct {
     }
 
     fn helper(self: *Page, id: []const u8, method: []const u8, arg: anytype) !Value {
-        const function = try self.a.print("function(arg){{return ({s}).{s}.call(this,arg)}}", .{ @embedFile("cdp_agent_helpers.js"), method });
-        return J.field(try self.invoke(id, function, arg, true), "value");
+        const scope = if (self.shadows.len > 0) try Shadow.root(self) else null;
+        defer if (scope) |root| self.release(root);
+        const function = try self.a.print("function(arg,scope){{const h=({s});h.scope=scope;return h.{s}.call(this,arg)}}", .{ @embedFile("cdp_agent_helpers.js"), method });
+        return J.field(try self.remote("Runtime.callFunctionOn", .{ .objectId = id, .functionDeclaration = function, .arguments = .{ .{ .value = arg }, if (scope) |root| try J.val(self.a, .{ .objectId = root }) else try J.val(self.a, .{ .value = @as(?u8, null) }) }, .returnByValue = true, .objectGroup = self.group }), "value");
     }
 
     fn release(self: *Page, id: []const u8) void {
@@ -269,6 +281,8 @@ pub const Page = struct {
     fn find(self: *Page, query: Query) !Found {
         try query.validate();
         self.diagnostics.phase = .resolve;
+        const scope = try Shadow.root(self);
+        defer self.release(scope);
         if (query.role) |role| {
             const tree = J.field(try self.command("Accessibility.getFullAXTree", .{}), "nodes");
             if (tree != .array) return error.InvalidProtocolReply;
@@ -279,6 +293,7 @@ pub const Page = struct {
                 if (!std.mem.eql(u8, role, J.str(J.field(J.field(node, "role"), "value")))) continue;
                 if (query.name) |name| if (!std.mem.eql(u8, name, J.str(J.field(J.field(node, "name"), "value")))) continue;
                 if (J.field(node, "backendDOMNodeId") == .null) continue;
+                if (self.shadows.len > 0 and !try Shadow.contains(self, scope, J.field(node, "backendDOMNodeId"))) continue;
                 count += 1;
                 backend = J.field(node, "backendDOMNodeId");
             }
@@ -287,8 +302,8 @@ pub const Page = struct {
             const resolved = try self.command("DOM.resolveNode", .{ .backendNodeId = backend, .objectGroup = self.group });
             return .{ .count = 1, .id = J.str(J.field(J.field(resolved, "object"), "objectId")) };
         }
-        const expression = try self.a.print("({s}).query({s})", .{ @embedFile("cdp_agent_helpers.js"), try J.json(self.a, query) });
-        const array = try self.remote("Runtime.evaluate", .{ .expression = expression, .returnByValue = false, .objectGroup = self.group });
+        const function = try self.a.print("function(q){{return ({s}).query.call(this,q)}}", .{@embedFile("cdp_agent_helpers.js")});
+        const array = try self.invoke(scope, function, query, false);
         const array_id = J.str(J.field(array, "objectId"));
         if (array_id.len == 0) return error.InvalidLocator;
         defer self.release(array_id);
@@ -319,12 +334,15 @@ pub const Page = struct {
         self.diagnostics.phase = .inspect;
         const tree = J.field(try self.command("Accessibility.getFullAXTree", .{}), "nodes");
         if (tree != .array) return error.InvalidProtocolReply;
+        const scope = if (self.shadows.len > 0) try Shadow.root(self) else "";
+        defer if (scope.len > 0) self.release(scope);
         var nodes: std.ArrayList(Value) = .empty;
         var used: usize = 0;
         var total: usize = 0;
         var truncated = false;
         for (tree.array.items) |node| {
             if (J.boolean(J.field(node, "ignored"))) continue;
+            if (scope.len > 0 and !try Shadow.contains(self, scope, J.field(node, "backendDOMNodeId"))) continue;
             total += 1;
             const value = try J.val(self.a, .{
                 .id = J.field(node, "nodeId"),
@@ -347,7 +365,7 @@ pub const Page = struct {
     }
 
     pub fn read(self: *Page, query: ?Query, limit: usize) !Value {
-        const id = try self.resolve(query orelse .{ .selector = "body" });
+        const id = if (query == null and self.shadows.len > 0) try Shadow.root(self) else try self.resolve(query orelse .{ .selector = "body" });
         defer self.release(id);
         self.diagnostics.phase = .inspect;
         return self.helper(id, "read", limit);
@@ -545,6 +563,11 @@ pub const Page = struct {
             const id = try self.resolve(q);
             defer self.release(id);
             _ = try self.invoke(id, "function(){this.focus();return true}", .{}, true);
+        }
+        if (self.shadows.len > 0) {
+            const scope = try Shadow.root(self);
+            defer self.release(scope);
+            if (!J.boolean(try self.helper(scope, "focused", .{}))) return error.FocusOutsideScope;
         }
         self.diagnostics.phase = .action;
         self.diagnostics.action = .possibly_dispatched;

@@ -38,6 +38,12 @@ test "independent consumer launches and evaluates" {
     try command.setFrame(frame_id);
     try command.fill(.{ .selector = "#inside" }, "package frame");
     try std.testing.expectEqualStrings("package frame", J.str(try command.eval("document.querySelector('#inside').value")));
+    _ = try command.eval("document.body.innerHTML='<section id=host></section>';document.querySelector('#host').attachShadow({mode:'closed'}).innerHTML='<input id=value><button>Component</button>';true");
+    try std.testing.expectEqual(@as(usize, 1), J.field(try command.shadowRoots(20_000), "roots").array.items.len);
+    try command.setShadows(&.{"#host"});
+    try command.fill(.{ .selector = "#value" }, "shadow package");
+    try command.click(.{ .role = "button", .name = "Component" });
+    try command.setShadows(&.{});
     command.frame = null;
     var connection = try Agent.Connection.connect(arena.allocator(), std.testing.io, try arena.allocator().print("http://127.0.0.1:{d}", .{browser.client.port}));
     defer connection.disconnect();

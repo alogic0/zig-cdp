@@ -297,3 +297,14 @@ flattened CDP calls with IDs unique across the connection. Event callbacks retai
 their source route; ordinary `call` replies from a callback inherit that route.
 `target_tree.Tree` provides bounded related-session/context tracking. Its storage
 must remain at a stable address until `deinit`; it only detaches its own sessions.
+
+Use `agent.Page.setShadows(&.{"#outer", "#inner"})` for strict author-root scope
+inside the selected document, and `shadowRoots(limit)` for host-chain discovery.
+`setShadows(&.{})` restores document scope. Changing scope while input is held
+fails. Selectors are borrowed for the Page lifetime; remote handles belong to the
+Page object group and are released during teardown. CSS/text/role lookup,
+read/snapshot and named input/upload operations honor this scope, including
+closed roots and assigned slots. Low-level `command`, `eval`, `protocol`,
+navigation and expression waits remain document operations in the library;
+the CLI rejects combining those operations with `--shadow`. See the
+[CLI root semantics and bounds](cli.md#shadow-roots).

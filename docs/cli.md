@@ -164,7 +164,7 @@ parent IDs and backend DOM IDs. Its byte budget covers serialized nodes; the
 small JSON envelope is additional. Both default to 20,000 bytes and accept
 `--limit` from 1 to 1,048,576. Snapshot node IDs are observations of the current
 document and must be refreshed after navigation. Neither locator type promises
-iframe or shadow-root traversal.
+implicit iframe or shadow-root traversal; use `--frame` and `--shadow` for explicit scope.
 
 `--tab ID` targets a page without changing the session's selection.
 `--timeout MS` overrides the operation budget without changing the session
@@ -531,3 +531,41 @@ Routing retains at most 64 related target sessions and 256 default execution
 contexts. Frame discovery is capped at 128 frames and 16 nesting levels.
 Attachments preserve desktop focus. Owned sessions keep interception on related
 frame sessions and apply the existing explicit origin allowlist.
+
+## Shadow roots
+
+```sh
+zig-cdp --endpoint "$endpoint" shadow-roots --tab "$tab_id" --frame "$frame_id"
+zig-cdp --endpoint "$endpoint" fill '#name' Alice --tab "$tab_id" \
+  --frame "$frame_id" --shadow '#account-panel' --shadow '#editor'
+zig-cdp --endpoint "$endpoint" click --role button --name Save --tab "$tab_id" \
+  --frame "$frame_id" --shadow '#account-panel' --shadow '#editor'
+```
+
+Repeat `--shadow HOST_CSS` from outermost to innermost host. Each host selector
+must match exactly once in its current root. Open and closed author roots work
+through CDP handles; the page's `attachShadow` function is unchanged.
+`shadow-roots` returns `roots: [{hosts: [...], type: "open"|"closed"}]` with host
+chains suitable for repeated `--shadow` options. Discovery is scoped to the
+selected document/root and excludes user-agent roots. Paths describe the current
+DOM and should be rediscovered after structural changes.
+
+CSS, normalized text and role/name locators, read, snapshot, click, fill, select,
+press, upload/download, locator waits and drag use the selected root. Assigned
+slot content is included; nested shadow roots require another host option.
+Default CSS remains document-only. Read without a locator reads the selected
+root's rendered text. A key without a locator requires focus inside that root.
+Ancestor inert/disabled state, motion and hit testing include shadow hosts and
+slots, including closed roots. Missing or ambiguous hosts fail explicitly.
+
+Document operations (`eval`, expression waits, open/reload/content), raw protocol,
+status and screenshots reject `--shadow`; omit it to operate on the selected
+frame/document. A sequence inherits its outer frame and shadow chain, and rejects
+unsupported document steps before dispatching any step. Step-local scope changes
+are invalid. Scope selection never replays a failed write.
+
+A chain has at most 16 hosts of at most 8192 bytes each. Discovery visits at most
+10,000 DOM nodes, 128 DOM levels and 64 author roots; it fails explicitly on a
+limit instead of returning an incomplete path list. `--limit` bounds discovery
+JSON bytes (default 20,000; maximum 1 MiB). The existing operation deadline and
+transport message bounds apply throughout.

@@ -260,8 +260,9 @@ pub const Client = struct {
     target: []const u8,
     endpoint: bool = false,
     tab: ?[]const u8 = null,
+    frame: ?[]const u8 = null,
     pub fn run(self: Client, args: []const []const u8, options: Context.Invoke) !V {
-        const argv = try std.mem.concat(self.c.a, []const u8, &.{ &.{ if (self.endpoint) "--endpoint" else "--session", self.target }, args, if (self.tab) |tab| &.{ "--tab", tab } else &.{} });
+        const argv = try std.mem.concat(self.c.a, []const u8, &.{ &.{ if (self.endpoint) "--endpoint" else "--session", self.target }, args, if (self.tab) |tab| &.{ "--tab", tab } else &.{}, if (self.frame) |frame| &.{ "--frame", frame } else &.{} });
         return self.c.invoke(argv, options);
     }
     pub fn result(self: Client, args: []const []const u8) !V {

@@ -18,6 +18,7 @@ pub const Request = struct {
     locator: ?Agent.Query = null,
     tab: ?[]const u8 = null,
     frame: ?[]const u8 = null,
+    shadows: []const []const u8 = &.{},
     timeout_ms: ?u32 = null,
     limit: usize = 20_000,
     state: []const u8 = "visible",
@@ -33,7 +34,7 @@ pub const Request = struct {
 const max_request = 1024 * 1024;
 const max_response = 16 * 1024 * 1024;
 
-const Op = enum { status, tabs, frames, @"new-tab", @"switch-tab", @"close-tab", allow, open, reload, content, eval, click, fill, text, read, snapshot, select, press, wait, timeout, screenshot, upload, download, drag, protocol, sequence, pause, close };
+const Op = enum { status, tabs, frames, @"shadow-roots", @"new-tab", @"switch-tab", @"close-tab", allow, open, reload, content, eval, click, fill, text, read, snapshot, select, press, wait, timeout, screenshot, upload, download, drag, protocol, sequence, pause, close };
 
 pub fn operation(input: Request) anyerror!Op {
     const op = std.meta.stringToEnum(Op, input.command) orelse return error.UnknownCommand;
@@ -41,10 +42,11 @@ pub fn operation(input: Request) anyerror!Op {
     if (input.frame) |frame| {
         if (frame.len == 0 or frame.len > 256) return error.InvalidFrame;
         switch (op) {
-            .status, .open, .reload, .content, .eval, .click, .fill, .text, .read, .snapshot, .select, .press, .wait, .upload, .download, .drag, .protocol, .sequence, .pause => {},
+            .@"shadow-roots", .status, .open, .reload, .content, .eval, .click, .fill, .text, .read, .snapshot, .select, .press, .wait, .upload, .download, .drag, .protocol, .sequence, .pause => {},
             else => return error.InvalidOption,
         }
     }
+    try validateShadows(input, op);
     if (input.files.len > 64) return error.FileCountExceeded;
     if (input.files.len > 0 and op != .upload) return error.InvalidOption;
     if (op != .drag and (input.destination != null or input.hold_ms != 300 or input.steps != 12)) return error.InvalidOption;
@@ -69,9 +71,12 @@ pub fn operation(input: Request) anyerror!Op {
         if (argc != 1) return error.WrongArgumentCount;
         var parsed = try parseSequence(std.heap.page_allocator, input.args[0]);
         defer parsed.deinit();
-        if (input.frame != null) for (parsed.value.steps) |step| {
-            if (std.mem.eql(u8, step.command, "screenshot")) return error.FrameCommandUnsupported;
-        };
+        for (parsed.value.steps) |step| {
+            if (input.frame != null and std.mem.eql(u8, step.command, "screenshot")) return error.FrameCommandUnsupported;
+            var scoped = step;
+            scoped.shadows = input.shadows;
+            try validateShadows(scoped, std.meta.stringToEnum(Op, step.command).?);
+        }
     }
     if (op == .pause) {
         if (argc != 1) return error.WrongArgumentCount;
@@ -97,7 +102,7 @@ pub fn operation(input: Request) anyerror!Op {
         return op;
     }
     const valid = switch (op) {
-        .status, .tabs, .frames, .reload, .close, .read, .snapshot => argc == 0,
+        .status, .tabs, .frames, .@"shadow-roots", .reload, .close, .read, .snapshot => argc == 0,
         .@"new-tab" => argc <= 1,
         .@"close-tab" => argc <= 1 and !(input.tab != null and argc != 0),
         .fill, .select, .download => argc == 2,
@@ -110,6 +115,17 @@ pub fn operation(input: Request) anyerror!Op {
     return op;
 }
 
+fn validateShadows(input: Request, op: Op) !void {
+    if (input.shadows.len == 0) return;
+    if (input.shadows.len > 16) return error.ShadowDepthExceeded;
+    for (input.shadows) |host| if (host.len == 0 or host.len > 8192) return error.InvalidLocator;
+    switch (op) {
+        .@"shadow-roots", .click, .fill, .text, .read, .snapshot, .select, .press, .upload, .download, .drag, .sequence, .pause => {},
+        .wait => if (input.locator == null) return error.ShadowCommandUnsupported,
+        else => return error.ShadowCommandUnsupported,
+    }
+}
+
 pub const Sequence = struct { version: u8, steps: []Request };
 pub fn parseSequence(a: A, raw: []const u8) anyerror!std.json.Parsed(Sequence) {
     if (raw.len > 1024 * 1024) return error.SequenceTooLarge;
@@ -118,7 +134,7 @@ pub fn parseSequence(a: A, raw: []const u8) anyerror!std.json.Parsed(Sequence) {
     if (parsed.value.version != 1 or parsed.value.steps.len == 0 or parsed.value.steps.len > 128) return error.InvalidSequence;
     for (parsed.value.steps) |*step| {
         step.modern = true;
-        if (step.tab != null or step.frame != null or step.timeout_ms != null or step.background) return error.InvalidSequence;
+        if (step.tab != null or step.frame != null or step.shadows.len > 0 or step.timeout_ms != null or step.background) return error.InvalidSequence;
         const op = std.meta.stringToEnum(Op, step.command) orelse return error.InvalidSequence;
         switch (op) {
             .open, .reload, .content, .eval, .click, .fill, .text, .read, .snapshot, .select, .press, .wait, .screenshot, .upload, .drag, .protocol, .pause => {},
@@ -298,10 +314,12 @@ pub fn failure(a: A, input: Request, err: anyerror, diagnostics: Agent.Diagnosti
 pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
     const op = try operation(input);
     if (input.frame) |frame| if (page.frame == null or !std.mem.eql(u8, page.frame.?, frame)) try page.setFrame(frame);
+    if (input.shadows.len > 0 and page.shadows.len == 0) try page.setShadows(input.shadows);
     const query: Agent.Query = input.locator orelse .{ .selector = if (input.args.len > 0) input.args[0] else "body" };
     const index: usize = if (input.locator == null) 1 else 0;
     switch (op) {
         .frames => return page.frames(),
+        .@"shadow-roots" => return page.shadowRoots(input.limit),
         .drag => try page.drag(query, input.destination orelse .{ .selector = input.args[1] }, input.hold_ms, input.steps),
         .protocol => return page.protocol(input.args[0], if (input.params) |params| try J.parse(page.a, try J.json(page.a, params)) else try J.parse(page.a, input.args[1])),
         .pause => try page.delay(try std.fmt.parseInt(u32, input.args[0], 10)),
@@ -633,6 +651,7 @@ const State = struct {
         var page = try self.commandPage(p, diagnostics);
         defer page.deinit();
         if (input.frame) |frame| try page.setFrame(frame);
+        try page.setShadows(input.shadows);
         switch (op) {
             .sequence => return executeSequence(&page, input.args[0], &p.allow_unload),
             .status => return J.val(a, .{ .browser = self.browser.version, .url = J.str(try page.eval("location.href")), .tab_id = p.target, .origins = self.origins.items, .timeout_ms = self.timeout_ms, .profile = self.browser.profile, .persistent_profile = self.browser.persistent_profile, .port = self.browser.client.port }),
