@@ -46,7 +46,7 @@ jobs:
       - name: Install virtual display dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends xvfb xauth openbox
+          sudo apt-get install --yes --no-install-recommends xvfb xauth openbox x11-utils
 
       - name: Check Zig formatting
         if: matrix.optimize == 'Debug'
@@ -62,7 +62,7 @@ jobs:
           taskset --cpu-list "$cpu" zig build test-cli -Doptimize=${{ matrix.optimize }} --summary all
 
       - name: Test headed browser on Xvfb
-        run: zig build test-headed -Dheaded-window-manager=true -Doptimize=${{ matrix.optimize }} --summary all
+        run: zig build test-headed test-focus -Dheaded-window-manager=true -Doptimize=${{ matrix.optimize }} --summary all
 
       - name: Test package consumer
         shell: bash

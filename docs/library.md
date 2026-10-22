@@ -103,6 +103,12 @@ UI and workers. `newTab` creates a blank tab; configure allowed origins before
 navigating it. `attachTab` validates context membership and preserves the current
 document. Use one connection per page at a time. These connections borrow the
 context: their `close()` only detaches.
+
+`newTabWithOptions(allocator, context, origins, .{ .background = true })` and
+`attachTabWithOptions(allocator, id, context, origins, .{ .background = true })`
+create/attach without activation. They retain the allocator and ownership rules
+of the existing `WithAllocator` methods. Existing entry points retain their
+foreground behavior; the CLI chooses passive attachment explicitly.
 The original page returned by `browser.page()` owns its isolated context and
 disposes that entire context on `close()`. `detach()` always releases only the
 connection, leaving both tab and context alive; the caller must eventually

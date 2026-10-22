@@ -452,6 +452,18 @@ pub const Page = struct {
 
     pub fn screenshot(self: *Page, output: []const u8, full_page: bool) !Value {
         self.diagnostics.phase = .inspect;
+        // A never-active headed tab may have no compositor frame. A scoped
+        // screencast requests frames without activating it or changing metrics.
+        const hidden = std.mem.eql(u8, J.str(try self.eval("document.visibilityState")), "hidden");
+        if (hidden) _ = try self.command("Page.startScreencast", .{ .format = "png", .everyNthFrame = 1 });
+        defer if (hidden) {
+            const protection = self.io.swapCancelProtection(.blocked);
+            defer _ = self.io.swapCancelProtection(protection);
+            const old_deadline = self.socket.deadline_ms;
+            self.socket.deadline_ms = now(self.io) + 200;
+            if (!self.socket.failed) _ = self.command("Page.stopScreencast", .{}) catch {};
+            self.socket.deadline_ms = old_deadline;
+        };
         const result = if (full_page) blk: {
             const metrics = try self.command("Page.getLayoutMetrics", .{});
             const size = J.field(metrics, "cssContentSize");

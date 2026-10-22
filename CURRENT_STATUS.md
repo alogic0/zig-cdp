@@ -1,5 +1,18 @@
 # Current delivery
 
+## Browser workflow parity, October 22, 2026
+
+Slice 1 adds background tab creation and owned CLI selection, passive attachment
+and recovery, and explicit library tab options with compatible foreground
+defaults. Hidden-tab screenshots request compositor frames with a temporary
+screencast, without activation or viewport overrides. The Xvfb/Openbox focus
+fixture uses two non-overlapping windows and checks native focus, selected-tab
+visibility, unsaved form state, geometry, input, both screenshot modes and
+recovery in owned and borrowed modes. Focus checks and the isolated package
+consumer pass Debug and ReleaseSafe; Debug library tests and ReleaseSafe
+endpoint acceptance pass. Remaining slices are tracked in the
+[workflow parity plan](docs/plans/2026-10-22-browser-workflow-parity.md).
+
 ## Low-core session scheduling, October 21, 2026
 
 The first hosted CLI checks exposed a timeout on the initial session `status`

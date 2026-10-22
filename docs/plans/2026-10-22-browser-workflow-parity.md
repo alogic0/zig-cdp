@@ -2,7 +2,7 @@
 
 Date: 2026-10-22
 
-Status: proposed; implementation has not started
+Status: implementation in progress; slice 1 delivered, slices 2–5 pending
 
 Baseline: zig-cdp 0.2.0 at `30b60ef`, compared with the standalone Node CDP
 client at `71284ed` and its task-resolution workflow. This extends the completed
@@ -14,8 +14,8 @@ create task tabs, inspect and operate controls, capture errors and API responses
 perform a drag, upload several files, and disconnect without writing a Zig,
 Python, or Node controller for those operations.
 
-This document records future work. Command examples below are proposed syntax,
-not commands supported by the baseline release.
+This document records the delivery contract. Slice 1 is implemented; command
+examples in later slices remain proposed until their checks pass.
 
 ## What already works
 

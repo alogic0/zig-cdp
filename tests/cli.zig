@@ -26,9 +26,11 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "discovery", .run = @import("cli_faults.zig").run },
         .{ .name = "endpoint", .run = @import("cli_endpoint.zig").run },
         .{ .name = "resources", .run = @import("cli_resources.zig").run },
+        .{ .name = "focus", .run = @import("cli_focus.zig").run },
     };
     var completed: usize = 0;
     for (cases) |case| {
+        if (selected == null and std.mem.eql(u8, case.name, "focus")) continue;
         if (selected) |name| if (!std.mem.eql(u8, name, case.name)) continue;
         var workspace = try S.Workspace.init(init.gpa, init.io, .{ .prefix = "cdp-native-cli-" });
         defer workspace.close(.failure) catch |err| std.debug.print("Workspace cleanup: {s}\n", .{@errorName(err)});

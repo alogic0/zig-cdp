@@ -13,8 +13,8 @@ const help =
     \\                                Own a persistent browser (foreground)
     \\status                           Browser version, URL, and session state
     \\tabs                             List tab IDs, titles, URLs, and selection
-    \\new-tab [URL]                    Create and select a tab (default blank)
-    \\switch-tab ID                    Select a tab for subsequent commands
+    \\new-tab [URL] [--background]     Create and select a tab (default blank)
+    \\switch-tab ID [--background]    Select a tab; background is session-only
     \\close-tab [ID]                   Close a tab (default selected)
     \\allow ORIGIN                     Allow an HTTP(S) origin for session tabs
     \\open URL                         Navigate the existing page
@@ -120,6 +120,11 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
             literal = true;
         } else if (!literal and std.mem.startsWith(u8, arg, "--")) {
             input.modern = true;
+            if (std.mem.eql(u8, arg, "--background")) {
+                if (input.background) return error.InvalidOption;
+                input.background = true;
+                continue;
+            }
             if (std.mem.eql(u8, arg, "--full-page") or std.mem.eql(u8, arg, "--viewport")) {
                 if (screenshot_mode or !std.mem.eql(u8, command, "screenshot")) return error.InvalidOption;
                 screenshot_mode = true;

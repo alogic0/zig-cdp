@@ -21,6 +21,7 @@ pub const Request = struct {
     limit: usize = 20_000,
     state: []const u8 = "visible",
     full_page: bool = false,
+    background: bool = false,
     modern: bool = false,
 };
 const max_request = 1024 * 1024;
@@ -34,6 +35,7 @@ pub fn operation(input: Request) !Op {
     if (!std.mem.eql(u8, input.state, "visible") and !std.mem.eql(u8, input.state, "hidden") and !std.mem.eql(u8, input.state, "attached") and !std.mem.eql(u8, input.state, "detached")) return error.InvalidWaitState;
     if (!std.mem.eql(u8, input.state, "visible") and (op != .wait or input.locator == null)) return error.InvalidOption;
     if (input.full_page and op != .screenshot) return error.InvalidOption;
+    if (input.background and op != .@"new-tab" and op != .@"switch-tab") return error.InvalidOption;
     if (input.tab != null and (op == .close or op == .allow or op == .timeout or op == .tabs or op == .@"new-tab" or op == .@"switch-tab")) return error.InvalidOption;
     if (input.limit == 0 or input.limit > 1024 * 1024) return error.InvalidLimit;
     if (input.timeout_ms) |ms| if (ms == 0 or ms > 120000) return error.InvalidTimeout;
@@ -311,9 +313,9 @@ const State = struct {
             self.backing.destroy(arena);
         }
         const page = if (id) |target|
-            try self.browser.attachTabWithAllocator(arena.allocator(), target, self.context, self.origins.items)
+            try self.browser.attachTabWithOptions(arena.allocator(), target, self.context, self.origins.items, .{ .background = true })
         else
-            try self.browser.newTabWithAllocator(arena.allocator(), self.context, self.origins.items);
+            try self.browser.newTabWithOptions(arena.allocator(), self.context, self.origins.items, .{ .background = true });
         errdefer {
             if (id == null) self.closeTarget(page.target) catch {};
             page.detach();
@@ -347,7 +349,6 @@ const State = struct {
             tabs = try self.browser.tabsWithAllocator(self.a, self.context);
         } else if (!contains(tabs, selected_id)) {
             self.selectPage(try self.obtain(tabs[0].id));
-            try self.activate(self.page);
         }
         return tabs;
     }
@@ -377,7 +378,7 @@ const State = struct {
         const info = J.field(try Agent.call(self.a, &self.browser.socket, "Target.getTargetInfo", .{ .targetId = page.target }), "targetInfo");
         return J.val(self.a, .{ .id = page.target, .title = J.str(J.field(info, "title")), .url = J.str(J.field(info, "url")), .selected = true });
     }
-    fn newTab(self: *State, input: ?[]const u8, diagnostics: *Agent.Diagnostics) !V {
+    fn newTab(self: *State, input: ?[]const u8, background: bool, diagnostics: *Agent.Diagnostics) !V {
         const url = input orelse "about:blank";
         _ = std.Uri.parse(url) catch return error.InvalidUrl;
         if (!self.permitted(url)) return error.OriginNotAllowed;
@@ -387,7 +388,6 @@ const State = struct {
         errdefer {
             self.closeTarget(page.target) catch {};
             self.removePage(page.target);
-            self.activate(self.page) catch {};
         }
         if (!std.mem.eql(u8, url, "about:blank")) {
             var command = try self.commandPage(page, diagnostics);
@@ -395,6 +395,7 @@ const State = struct {
             try command.goto(url);
         }
         const result = try self.describe(page);
+        if (!background) try self.activate(page);
         self.selectPage(page);
         diagnostics.action = .completed;
         return result;
@@ -415,7 +416,6 @@ const State = struct {
         const closed_id = try self.a.dupe(u8, id);
         if (closing_selected) self.selectPage(next);
         self.removePage(id);
-        if (closing_selected) try self.activate(next);
         diagnostics.action = .completed;
         return J.val(self.a, .{ .closed = closed_id, .selected = self.page.target });
     }
@@ -475,13 +475,13 @@ const State = struct {
                 for (tabs) |tab| try result.append(a, try J.val(a, .{ .id = tab.id, .title = tab.title, .url = tab.url, .selected = std.mem.eql(u8, tab.id, self.page.target) }));
                 return .{ .array = result.toManaged(a) };
             },
-            .@"new-tab" => return self.newTab(if (input.args.len == 0) null else input.args[0], diagnostics),
+            .@"new-tab" => return self.newTab(if (input.args.len == 0) null else input.args[0], input.background, diagnostics),
             .@"switch-tab" => {
                 if (!contains(tabs, input.args[0])) return error.TabNotFound;
                 const next = try self.obtain(input.args[0]);
                 diagnostics.phase = .action;
                 diagnostics.action = .possibly_dispatched;
-                try self.activate(next);
+                if (!input.background) try self.activate(next);
                 self.selectPage(next);
                 diagnostics.action = .completed;
                 return self.describe(next);

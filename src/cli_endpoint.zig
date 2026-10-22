@@ -33,6 +33,7 @@ pub fn run(a: A, io: std.Io, endpoint: []const u8, input: session.Request) ![]co
 fn execute(a: A, io: std.Io, endpoint: []const u8, input: session.Request, diagnostics: *Agent.Diagnostics, deadline: i64) !V {
     const op = try session.operation(input);
     if (op == .allow or op == .timeout) return error.InvalidEndpointCommand;
+    if (op == .@"switch-tab" and input.background) return error.EndpointRequiresExplicitTab;
     var connection = try Agent.Connection.connect(a, io, endpoint);
     defer connection.disconnect();
     connection.socket.deadline_ms = deadline + 100;
@@ -48,7 +49,7 @@ fn execute(a: A, io: std.Io, endpoint: []const u8, input: session.Request, diagn
             _ = std.Uri.parse(url) catch return error.InvalidUrl;
             diagnostics.phase = .action;
             diagnostics.action = .possibly_dispatched;
-            const created = try Agent.call(a, &connection.socket, "Target.createTarget", .{ .url = "about:blank", .newWindow = false });
+            const created = try Agent.call(a, &connection.socket, "Target.createTarget", .{ .url = "about:blank", .newWindow = false, .background = input.background });
             const id = J.str(J.field(created, "targetId"));
             if (!std.mem.eql(u8, url, "about:blank")) {
                 var socket = try connection.page(id);

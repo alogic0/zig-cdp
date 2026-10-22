@@ -108,6 +108,15 @@ without reloading it, so DOM state and form values remain. `status.tab_id` also
 reports the selected ID. Selection belongs to the CLI: manually clicking another
 Chrome tab does not change which tab a later CLI command controls.
 
+Use `new-tab [URL] --background` to create the tab without activating it.
+It still becomes the owned session's CLI-selected tab. `switch-tab ID
+--background` changes only that selection. Explicit `--tab ID` page commands
+attach without activation, as do automatic selection recovery and last-tab
+replacement. This intentionally removes implicit foreground changes from
+recovery. Chrome may select another tab when a visible tab closes; the CLI does
+not request window activation. Initial window creation and native dialogs can
+still affect focus.
+
 `close-tab [ID]` closes only that tab; omitting ID uses the selected tab. The
 reply is `{closed:ID,selected:ID}`. Closing an inactive tab preserves selection;
 closing the selected tab selects a surviving tab. Closing the final tab first
@@ -308,6 +317,9 @@ operate directly on the external browser. Every page command requires `--tab
 ID`; there is no selection stored between invocations. `switch-tab` activates
 that tab in Chrome. `new-tab` creates a default-context tab and returns its ID.
 `close` disconnects, while `close-tab` deliberately closes the specified target.
+`new-tab --background` creates a background tab. Endpoint `switch-tab
+--background` fails with `EndpointRequiresExplicitTab`; use `--tab ID` on each
+operation instead. Ordinary endpoint operations never request activation.
 `allow`, `timeout` and `serve` are session commands; use `--timeout MS` for an
 attached command's budget (30 seconds by default).
 

@@ -75,4 +75,10 @@ pub fn build(b: *std.Build) void {
     }
     headed_run.addArtifactArg(headed_tests);
     b.step("test-headed", "Check native viewport resizing (requires xvfb-run)").dependOn(&headed_run.step);
+    const focus_run = b.addSystemCommand(&.{ "env", "-u", "WAYLAND_DISPLAY", "-u", "WAYLAND_SOCKET", "XDG_SESSION_TYPE=x11", "GDK_BACKEND=x11", "xvfb-run", "-a", "-s", "-screen 0 1600x1000x24", "sh", "-c", "openbox --sm-disable >/dev/null 2>&1 & wm_pid=$!; trap 'kill \"$wm_pid\"; wait \"$wm_pid\"' EXIT; \"$@\"", "focus-test" });
+    focus_run.addArtifactArg(native_cli_tests);
+    focus_run.addArtifactArg(cli);
+    focus_run.addArgs(&.{ "--case", "focus" });
+    focus_run.has_side_effects = true;
+    b.step("test-focus", "Verify background CLI operations under Xvfb/Openbox").dependOn(&focus_run.step);
 }

@@ -98,6 +98,10 @@ Browser shutdown remains the final context/process cleanup owner.
 The library exposes context-scoped `tabs`, `newTab`, and `attachTab`, plus target
 closure and connection-only `Page.detach`. Only a Page created by `Browser.page`
 owns its isolated context. Borrowed sibling/attached pages never dispose it.
+Option-bearing creation/attachment APIs allow background operation without
+changing the old entry points. CLI implicit attachments and recovery are passive;
+unqualified new-tab/switch-tab retain explicit foreground behavior. Background
+creation selects the CLI target independently of Chrome's selected tab.
 
 ## Agent command layer
 

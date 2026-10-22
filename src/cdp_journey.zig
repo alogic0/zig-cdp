@@ -216,6 +216,7 @@ pub const Browser = struct {
         return self.connectPage(id, "", origins, false);
     }
     pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
+    pub const TabOptions = struct { background: bool = false };
 
     /// List page targets in one context. An empty context selects the profile's
     /// default context; Chrome's internal UI and workers are excluded.
@@ -250,13 +251,17 @@ pub const Browser = struct {
     }
     /// The page and its connection borrow a; detach before destroying it.
     pub fn newTabWithAllocator(self: *Browser, a: A, context: []const u8, origins: []const []const u8) !*Page {
+        return self.newTabWithOptions(a, context, origins, .{});
+    }
+    /// Background creation never activates the page during attachment.
+    pub fn newTabWithOptions(self: *Browser, a: A, context: []const u8, origins: []const []const u8, options: TabOptions) !*Page {
         const result = if (context.len == 0)
-            try commandValue(a, &self.socket, "Target.createTarget", .{ .url = "about:blank", .newWindow = false })
+            try commandValue(a, &self.socket, "Target.createTarget", .{ .url = "about:blank", .newWindow = false, .background = options.background })
         else
-            try commandValue(a, &self.socket, "Target.createTarget", .{ .url = "about:blank", .browserContextId = context, .newWindow = false });
+            try commandValue(a, &self.socket, "Target.createTarget", .{ .url = "about:blank", .browserContextId = context, .newWindow = false, .background = options.background });
         const id = str(field(result, "targetId"));
         errdefer _ = commandValue(a, &self.socket, "Target.closeTarget", .{ .targetId = id }) catch {};
-        return self.connectPageWithAllocator(a, id, context, origins, false);
+        return self.connectPageWithAllocator(a, id, context, origins, false, options);
     }
     /// Attach to an existing page in the specified context without navigation.
     pub fn attachTab(self: *Browser, id: []const u8, context: []const u8, origins: []const []const u8) !*Page {
@@ -264,8 +269,12 @@ pub const Browser = struct {
     }
     /// The page and its connection borrow a; detach before destroying it.
     pub fn attachTabWithAllocator(self: *Browser, a: A, id: []const u8, context: []const u8, origins: []const []const u8) !*Page {
+        return self.attachTabWithOptions(a, id, context, origins, .{});
+    }
+    /// Background attachment preserves Chrome's active tab and window.
+    pub fn attachTabWithOptions(self: *Browser, a: A, id: []const u8, context: []const u8, origins: []const []const u8, options: TabOptions) !*Page {
         for (try self.tabsWithAllocator(a, context)) |tab| {
-            if (std.mem.eql(u8, tab.id, id)) return self.connectPageWithAllocator(a, tab.id, context, origins, false);
+            if (std.mem.eql(u8, tab.id, id)) return self.connectPageWithAllocator(a, tab.id, context, origins, false, options);
         }
         return error.TabNotFound;
     }
@@ -275,9 +284,9 @@ pub const Browser = struct {
         if (!boolean(field(try self.command("Target.closeTarget", .{ .targetId = id }), "success"))) return error.TabNotFound;
     }
     fn connectPage(self: *Browser, id: []const u8, context: []const u8, origins: []const []const u8, owns_context: bool) !*Page {
-        return self.connectPageWithAllocator(self.a, id, context, origins, owns_context);
+        return self.connectPageWithAllocator(self.a, id, context, origins, owns_context, .{});
     }
-    fn connectPageWithAllocator(self: *Browser, a: A, id: []const u8, context: []const u8, origins: []const []const u8, owns_context: bool) !*Page {
+    fn connectPageWithAllocator(self: *Browser, a: A, id: []const u8, context: []const u8, origins: []const []const u8, owns_context: bool, options: TabOptions) !*Page {
         if (id.len == 0 or id.len > 128 or std.mem.indexOfAny(u8, id, "/?# \r\n") != null) return error.InvalidProtocolReply;
         const ws = try a.print("/devtools/page/{s}", .{id});
         var socket = try cdp.CdpClient.init(a, self.io, self.client.port).connectWs(ws);
@@ -299,7 +308,7 @@ pub const Browser = struct {
         }
         try p.initScript(@embedFile("cdp_locators.js"));
         _ = try p.eval(@embedFile("cdp_locators.js"));
-        _ = try p.command("Page.bringToFront", .{});
+        if (!options.background) _ = try p.command("Page.bringToFront", .{});
         return p;
     }
 };

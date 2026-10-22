@@ -41,6 +41,7 @@ needed. List its tabs, record a target ID, then address that tab explicitly:
 
 ```sh
 "$cdp_bin" --endpoint http://127.0.0.1:9239 tabs
+"$cdp_bin" --endpoint http://127.0.0.1:9239 new-tab --background
 "$cdp_bin" --endpoint http://127.0.0.1:9239 snapshot --tab "$tab_id"
 "$cdp_bin" --endpoint http://127.0.0.1:9239 fill --tab "$tab_id" --role textbox --name Name --value Sample
 "$cdp_bin" --endpoint http://127.0.0.1:9239 click --tab "$tab_id" --role button --name Save
@@ -52,6 +53,11 @@ A browser WebSocket URL also works. Each command disconnects when finished;
 in place. `close-tab` explicitly closes a target. Attachment uses the browser's
 normal network policy. See the [attachment guide](docs/cli.md#existing-browser-attachment)
 for downloads and ownership details.
+
+Use `new-tab --background` and then explicit `--tab ID` commands to keep the
+browser behind your current window. In owned sessions, `switch-tab ID
+--background` changes CLI selection only. Unqualified tab creation/switching
+still requests foreground activation. Ordinary attachment and recovery do not.
 
 ### Start and retain a session
 
@@ -238,6 +244,8 @@ zig build test-cli --summary all
 zig build test-cli -Doptimize=ReleaseSafe --summary all
 zig build test-headed --summary all
 zig build test-headed -Doptimize=ReleaseSafe --summary all
+zig build test-focus --summary all
+zig build test-focus -Doptimize=ReleaseSafe --summary all
 ```
 
 The CLI acceptance runner is native Zig and invokes the built CLI as separate
