@@ -28,6 +28,17 @@ test "independent consumer launches and evaluates" {
     try command.content("<input type=file multiple hidden>");
     try command.uploadFiles(.{ .selector = "input" }, &.{ first, second });
     try std.testing.expectEqual(@as(i64, 2), J.number(try command.eval("document.querySelector('input').files.length")));
+    try command.content("<iframe name=package srcdoc='<input id=inside>'></iframe>");
+    try command.waitExpression("document.querySelector('iframe').contentDocument?.querySelector('#inside')!==null");
+    const frames = try command.frames();
+    var frame_id: []const u8 = "";
+    for (frames.array.items) |frame| if (std.mem.eql(u8, J.str(J.field(frame, "name")), "package")) {
+        frame_id = J.str(J.field(frame, "id"));
+    };
+    try command.setFrame(frame_id);
+    try command.fill(.{ .selector = "#inside" }, "package frame");
+    try std.testing.expectEqualStrings("package frame", J.str(try command.eval("document.querySelector('#inside').value")));
+    command.frame = null;
     var connection = try Agent.Connection.connect(arena.allocator(), std.testing.io, try arena.allocator().print("http://127.0.0.1:{d}", .{browser.client.port}));
     defer connection.disconnect();
     try std.testing.expect((try connection.tabs()).array.items.len > 0);

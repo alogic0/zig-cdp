@@ -52,6 +52,7 @@ pub const Fixture = struct {
             };
             return;
         }
+        if (H.eql(u8, target, "/frame-controls")) return input.response.send(.{ .body = @embedFile("fixtures/frame-controls.html"), .headers = &.{.{ .name = "Content-Type", .value = "text/html" }} });
         if (H.eql(u8, target, "/workflow")) return input.response.send(.{ .body = @embedFile("fixtures/workflow.html"), .headers = &.{.{ .name = "Content-Type", .value = "text/html" }} });
         if (std.mem.startsWith(u8, target, "/api/save")) return input.response.send(.{ .body = "{\"saved\":true,\"id\":42}", .headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });
         if (H.eql(u8, target, "/api/reject")) return input.response.send(.{ .body = "{\"saved\":false}", .status = .bad_request, .headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });

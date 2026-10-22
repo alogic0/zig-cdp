@@ -17,6 +17,17 @@ ten-second shutdown gate verifies removed owned profiles/processes and survival
 of an unrelated browser. The precise timing of the original intermittent run
 was not reproduced; the swallowing defect is verified independently.
 
+The frame slice adds flattened session routing, bounded related target/context
+tracking, `frames` discovery and `--frame ID` selection. Both ownership modes
+pass same-process, cross-site out-of-process and nested frame actions, uploads,
+sequences, process-changing navigation/reload, missing/removed frame rejection
+and ancestor occlusion. Raw protocol document lookup selects the frame; named
+pointer actions map through its ancestors. Owned Fetch policy persists on
+related iframe sessions. Context selection uses unique IDs to prevent numeric
+context reuse from redirecting an operation. Debug and ReleaseSafe focused
+checks and the independent exported package consumer pass; the integration
+headed/resource matrix remains pending with the shadow and worker slices.
+
 ## Browser workflow parity completed (0.3.0), October 22, 2026
 
 Slice 1 adds background tab creation and owned CLI selection, passive attachment

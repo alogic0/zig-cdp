@@ -33,6 +33,18 @@
     const x=(left+right)/2, y=(top+bottom)/2, hit=document.elementFromPoint(x,y);
     return hit && (hit===this || this.contains(hit)) ? {x,y,bounds:{x:r.x,y:r.y,width:r.width,height:r.height}} : {reason:'covered'};
   },
+  framePoint(point) {
+    if (!this.isConnected || !this.offsetWidth || !this.offsetHeight) return {reason:'hidden'};
+    for(let n=this;n;n=n.parentElement) {
+      const m=new DOMMatrix(getComputedStyle(n).transform);
+      if(!m.is2D || Math.abs(m.b)>0.0001 || Math.abs(m.c)>0.0001 || m.a<=0 || m.d<=0) return {reason:'transform'};
+    }
+    const r=this.getBoundingClientRect(), sx=r.width/this.offsetWidth, sy=r.height/this.offsetHeight;
+    if(point.x<0 || point.y<0 || point.x>=this.clientWidth || point.y>=this.clientHeight) return {reason:'hidden'};
+    const x=r.left+(this.clientLeft+point.x)*sx, y=r.top+(this.clientTop+point.y)*sy;
+    if(x<0 || y<0 || x>=innerWidth || y>=innerHeight) return {reason:'hidden'};
+    return document.elementFromPoint(x,y)===this ? {x,y} : {reason:'covered'};
+  },
   prepareFill() {
     if (this.matches(':disabled') || this.closest('[aria-disabled="true"],[inert]')) return 'disabled';
     if (this.readOnly) return 'readonly';

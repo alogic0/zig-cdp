@@ -283,3 +283,17 @@ Decoded CDP JSON replaces unpaired UTF-16 escapes with U+FFFD, including Chrome
 previews truncated inside an emoji. Valid surrogate pairs and literal escapes
 are preserved; raw WebSocket messages are unchanged. Other JSON syntax errors
 still fail the operation.
+
+`agent.Page.frames()` discovers document IDs and hierarchy; `setFrame(id)` scopes
+subsequent page operations to a discovered document. `frame = null` restores
+main-document scope when no input is held. A request-owned target tracker handles
+default execution contexts and related iframe sessions; CLI-owned journey pages
+retain that tracker so origin interception survives between commands. The tracker
+replays Runtime contexts on its own connection when first installed. It does
+not change other clients' domains or take ownership of targets.
+
+`WsSession.callSession(session_id, method, params_json)` supports serialized
+flattened CDP calls with IDs unique across the connection. Event callbacks retain
+their source route; ordinary `call` replies from a callback inherit that route.
+`target_tree.Tree` provides bounded related-session/context tracking. Its storage
+must remain at a stable address until `deinit`; it only detaches its own sessions.

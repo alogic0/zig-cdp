@@ -71,6 +71,10 @@ validated before replacing the file input selection.
 The [complete native workflow](docs/browser-workflow.md) includes endpoint
 discovery, observer readiness, response verification and copyable commands.
 
+Use `frames --tab ID` to discover embedded documents, then pass `--frame FRAME_ID`
+to page actions. Same-origin, cross-origin and nested frames use the same CLI
+commands; [frame scope and limits](docs/cli.md#frames) explain navigation and input.
+
 ### Start and retain a session
 
 Record three absolute paths in your task state:

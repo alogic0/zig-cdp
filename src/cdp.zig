@@ -4,6 +4,7 @@
 const std = @import("std");
 pub const journey = @import("cdp_journey.zig");
 pub const agent = @import("cdp_agent.zig");
+pub const target_tree = @import("cdp_targets.zig");
 
 pub const Target = struct {
     id: []const u8,
@@ -31,6 +32,8 @@ pub const WsSession = struct {
     pending_bytes: usize = 0,
     event_context: ?*anyopaque = null,
     event_handler: ?*const fn (*anyopaque, *WsSession, []const u8) anyerror!void = null,
+    /// Borrowed only during an event callback; replies inherit its target route.
+    event_session_id: ?[]const u8 = null,
     /// Absolute awake-clock budget shared by all frames of one operation.
     deadline_ms: ?i64 = null,
     pub const max_message_bytes = 64 * 1024 * 1024;
@@ -214,15 +217,25 @@ pub const WsSession = struct {
 
     /// Sends a JSON-RPC command and waits for the response with the matching ID.
     pub fn call(self: *WsSession, method: []const u8, params_json: ?[]const u8) ![]const u8 {
+        return self.callSession(self.event_session_id, method, params_json);
+    }
+
+    /// Serialized flattened-session command. IDs remain unique on the wire.
+    pub fn callSession(self: *WsSession, session_id: ?[]const u8, method: []const u8, params_json: ?[]const u8) ![]const u8 {
         if (self.failed) return error.ConnectionClosed;
-        errdefer self.failed = true;
+        var detached = false;
+        errdefer if (!detached) {
+            self.failed = true;
+        };
         const id = self.next_id;
         self.next_id += 1;
 
-        const cmd = if (params_json) |p|
-            try std.fmt.allocPrint(self.alloc, "{{\"id\":{d},\"method\":\"{s}\",\"params\":{s}}}", .{ id, method, p })
+        const route = if (session_id) |sid| try std.json.Stringify.valueAlloc(self.alloc, sid, .{}) else null;
+        defer if (route) |bytes| self.alloc.free(bytes);
+        const cmd = if (route) |sid|
+            try std.fmt.allocPrint(self.alloc, "{{\"id\":{d},\"sessionId\":{s},\"method\":\"{s}\",\"params\":{s}}}", .{ id, sid, method, params_json orelse "{}" })
         else
-            try std.fmt.allocPrint(self.alloc, "{{\"id\":{d},\"method\":\"{s}\"}}", .{ id, method });
+            try std.fmt.allocPrint(self.alloc, "{{\"id\":{d},\"method\":\"{s}\",\"params\":{s}}}", .{ id, method, params_json orelse "{}" });
         defer self.alloc.free(cmd);
 
         try self.sendRaw(cmd);
@@ -240,7 +253,22 @@ pub const WsSession = struct {
             if (received_id == id) return raw;
             if (received_id == null) {
                 if (self.event_handler) |handler| {
-                    try handler(self.event_context.?, self, raw);
+                    const envelope = try @import("cdp_json.zig").parsed(self.alloc, raw);
+                    defer envelope.deinit();
+                    const previous = self.event_session_id;
+                    const sid = journey.field(envelope.value, "sessionId");
+                    self.event_session_id = if (sid == .string) sid.string else null;
+                    defer self.event_session_id = previous;
+                    handler(self.event_context.?, self, raw) catch |err| {
+                        if (err == error.SessionDetached) detached = true;
+                        return err;
+                    };
+                    if (session_id) |expected| if (std.mem.eql(u8, journey.str(journey.field(envelope.value, "method")), "Target.detachedFromTarget") and
+                        std.mem.eql(u8, journey.str(journey.field(journey.field(envelope.value, "params"), "sessionId")), expected))
+                    {
+                        detached = true;
+                        return error.SessionDetached;
+                    };
                     self.alloc.free(raw);
                     continue;
                 }

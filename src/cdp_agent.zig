@@ -111,6 +111,9 @@ pub const Page = struct {
     deadline_ms: i64,
     previous_deadline: ?i64,
     input: Input.State = .{},
+    targets: ?*cdp.target_tree.Tree = null,
+    owns_targets: bool = false,
+    frame: ?[]const u8 = null,
 
     pub fn init(a: A, io: std.Io, socket: *cdp.WsSession, timeout_ms: u32, diagnostics: *Diagnostics) !Page {
         var random: [8]u8 = undefined;
@@ -126,17 +129,79 @@ pub const Page = struct {
 
     pub fn deinit(self: *Page) void {
         self.input.finish(self);
+        defer if (self.owns_targets) self.targets.?.deinit();
         // Release remote handles even after the operation budget expires. A
         // failed cleanup seals this socket rather than reusing uncertain state.
         const protection = self.io.swapCancelProtection(.blocked);
         defer _ = self.io.swapCancelProtection(protection);
         self.socket.deadline_ms = now(self.io) + 200;
-        if (!self.socket.failed) _ = self.command("Runtime.releaseObjectGroup", .{ .objectGroup = self.group }) catch {};
+        if (!self.socket.failed) _ = cdp.target_tree.callSession(self.a, self.socket, null, "Runtime.releaseObjectGroup", .{ .objectGroup = self.group }) catch {};
+        if (self.targets) |tree| for (&tree.sessions) |*s| {
+            if (s.active and !self.socket.failed) _ = tree.call(self.a, s.id.slice(), "Runtime.releaseObjectGroup", .{ .objectGroup = self.group }) catch {};
+        };
         self.socket.deadline_ms = self.previous_deadline;
     }
 
-    pub fn command(self: *Page, method: []const u8, params: anytype) !Value {
-        return call(self.a, self.socket, method, params);
+    pub fn command(self: *Page, method: []const u8, params: anytype) anyerror!Value {
+        if (self.frame != null and std.mem.eql(u8, method, "DOM.getDocument")) {
+            const ctx = try self.frameContext();
+            _ = try cdp.target_tree.callSession(self.a, self.socket, route(ctx.session.slice()), "DOM.getDocument", .{ .depth = 0 });
+            const object = try self.remote("Runtime.evaluate", .{ .expression = "document", .returnByValue = false, .objectGroup = self.group });
+            const node = try self.command("DOM.requestNode", .{ .objectId = J.field(object, "objectId") });
+            const value = try J.val(self.a, params);
+            const depth = J.field(value, "depth");
+            const description = try self.command("DOM.describeNode", .{ .nodeId = J.field(node, "nodeId"), .depth = if (depth == .integer) depth.integer else 1 });
+            return J.val(self.a, .{ .root = J.field(description, "node") });
+        }
+        if (self.frame != null and !rootMethod(method)) {
+            const ctx = try self.frameContext();
+            var value = if (@TypeOf(params) == @TypeOf(.{})) try J.parse(self.a, "{}") else try J.val(self.a, params);
+            if (std.mem.eql(u8, method, "Runtime.evaluate")) {
+                if (ctx.unique.len == 0) return error.InvalidProtocolReply;
+                try value.object.put(self.a, "uniqueContextId", .{ .string = ctx.unique.slice() });
+            }
+            if (std.mem.eql(u8, method, "Accessibility.getFullAXTree") or std.mem.eql(u8, method, "Page.navigate")) try value.object.put(self.a, "frameId", .{ .string = self.frame.? });
+            return cdp.target_tree.callSession(self.a, self.socket, if (std.mem.eql(u8, method, "Page.navigate")) null else route(ctx.session.slice()), method, value);
+        }
+        return cdp.target_tree.callSession(self.a, self.socket, null, method, params);
+    }
+
+    pub fn ensureTargets(self: *Page) !*cdp.target_tree.Tree {
+        if (self.targets) |tree| return tree;
+        const tree = try self.a.create(cdp.target_tree.Tree);
+        tree.* = .{ .a = self.socket.alloc, .socket = self.socket };
+        try tree.start();
+        self.targets = tree;
+        self.owns_targets = true;
+        return tree;
+    }
+    pub fn frames(self: *Page) !Value {
+        return (try self.ensureTargets()).frames(self.a);
+    }
+    pub fn setFrame(self: *Page, id: []const u8) !void {
+        if (id.len == 0 or id.len > 256) return error.InvalidFrame;
+        if (self.input.held()) return error.HeldInputScopeChange;
+        const frames_value = try self.frames();
+        for (frames_value.array.items) |frame_value| if (std.mem.eql(u8, J.str(J.field(frame_value, "id")), id)) {
+            self.frame = id;
+            _ = try self.frameContext();
+            return;
+        };
+        return error.FrameNotFound;
+    }
+    fn frameContext(self: *Page) !*cdp.target_tree.Context {
+        const tree = try self.ensureTargets();
+        if (tree.context(self.frame.?)) |ctx| return ctx;
+        const all = try tree.frames(self.a);
+        if (tree.context(self.frame.?)) |ctx| return ctx;
+        for (all.array.items) |f| if (std.mem.eql(u8, J.str(J.field(f, "id")), self.frame.?)) return error.FrameContextUnavailable;
+        return error.FrameNotFound;
+    }
+    fn rootMethod(method: []const u8) bool {
+        return std.mem.startsWith(u8, method, "Input.") or std.mem.startsWith(u8, method, "Emulation.") or oneOf(method, &.{ "Page.startScreencast", "Page.stopScreencast", "Page.captureScreenshot", "Page.getLayoutMetrics" });
+    }
+    fn route(sid: []const u8) ?[]const u8 {
+        return if (sid.len == 0) null else sid;
     }
 
     fn remote(self: *Page, method: []const u8, params: anytype) !Value {
@@ -164,7 +229,9 @@ pub const Page = struct {
         const before = try self.eval("performance.timeOrigin");
         self.diagnostics.phase = .action;
         self.diagnostics.action = .possibly_dispatched;
-        _ = try self.command("Page.reload", .{});
+        if (self.frame != null) {
+            _ = try self.command("Page.navigate", .{ .url = J.str(try self.eval("location.href")) });
+        } else _ = try self.command("Page.reload", .{});
         try self.waitExpression(try self.a.print("performance.timeOrigin !== {s} && document.readyState === 'complete'", .{try J.json(self.a, before)}));
         self.diagnostics.action = .completed;
     }
@@ -315,6 +382,33 @@ pub const Page = struct {
         if (now(self.io) >= self.deadline_ms) return error.Timeout;
     }
 
+    fn framePoint(self: *Page, point: Value) !Value {
+        if (self.frame == null) return point;
+        const tree = try self.ensureTargets();
+        const all = try tree.frames(self.a);
+        var id = self.frame.?;
+        var mapped = point;
+        var depth: usize = 0;
+        while (true) : (depth += 1) {
+            if (depth > 16) return error.FrameLimitExceeded;
+            const frame_value = blk: {
+                for (all.array.items) |f| if (std.mem.eql(u8, J.str(J.field(f, "id")), id)) break :blk f;
+                return error.FrameNotFound;
+            };
+            const parent = J.str(J.field(frame_value, "parent"));
+            if (parent.len == 0) return mapped;
+            const ctx = tree.context(parent) orelse return error.FrameContextUnavailable;
+            const sid = route(ctx.session.slice());
+            const owner = try tree.call(self.a, sid, "DOM.getFrameOwner", .{ .frameId = id });
+            const object = J.field(try tree.call(self.a, sid, "DOM.resolveNode", .{ .backendNodeId = J.field(owner, "backendNodeId"), .executionContextId = ctx.id, .objectGroup = self.group }), "object");
+            const function = try self.a.print("function(arg){{return ({s}).framePoint.call(this,arg)}}", .{@embedFile("cdp_agent_helpers.js")});
+            const result = try tree.call(self.a, sid, "Runtime.callFunctionOn", .{ .objectId = J.field(object, "objectId"), .functionDeclaration = function, .arguments = .{.{ .value = mapped }}, .returnByValue = true });
+            if (J.field(result, "exceptionDetails") != .null) return error.BrowserEvaluationFailed;
+            mapped = J.field(J.field(result, "result"), "value");
+            if (J.str(J.field(mapped, "reason")).len > 0) return mapped;
+            id = parent;
+        }
+    }
     fn stablePoint(self: *Page, query: Query) !Value {
         var blocked: anyerror = error.ElementNotVisible;
         while (true) {
@@ -325,13 +419,19 @@ pub const Page = struct {
             view.a = scratch.allocator();
             const id = try view.resolve(query);
             defer view.release(id);
-            var info = try view.helper(id, "point", .{});
+            var local = try view.helper(id, "point", .{});
+            var info = if (J.str(J.field(local, "reason")).len == 0) try view.framePoint(local) else local;
             if (J.str(J.field(info, "reason")).len == 0) {
                 self.pause() catch |err| return if (err == error.Canceled) err else error.ElementNotStable;
-                info = try view.helper(id, "point", info);
+                local = try view.helper(id, "point", local);
+                const after = if (J.str(J.field(local, "reason")).len == 0) try view.framePoint(local) else local;
+                if (J.str(J.field(after, "reason")).len == 0 and (@abs(numeric(J.field(info, "x")) - numeric(J.field(after, "x"))) > 0.5 or @abs(numeric(J.field(info, "y")) - numeric(J.field(after, "y"))) > 0.5)) {
+                    info = try J.val(view.a, .{ .reason = "moving" });
+                } else info = after;
             }
             const reason = J.str(J.field(info, "reason"));
             if (reason.len == 0) return J.parse(self.a, try J.json(view.a, info));
+            if (std.mem.eql(u8, reason, "transform")) return error.FrameTransformUnsupported;
             blocked = if (std.mem.eql(u8, reason, "disabled")) error.ElementDisabled else if (std.mem.eql(u8, reason, "covered")) error.ElementCovered else if (std.mem.eql(u8, reason, "moving")) error.ElementNotStable else error.ElementNotVisible;
             self.pause() catch |err| return if (err == error.Canceled) err else blocked;
         }
@@ -431,7 +531,7 @@ pub const Page = struct {
             view.a = scratch.allocator();
             if (J.boolean(view.eval(expression) catch |err| blk: {
                 if (self.socket.failed) return err;
-                if (err == error.CdpCommandFailed) break :blk .null;
+                if (err == error.CdpCommandFailed or err == error.FrameContextUnavailable) break :blk .null;
                 return err;
             })) return;
             if (now(self.io) >= self.deadline_ms) return error.BrowserConditionTimeout;
@@ -521,6 +621,7 @@ pub const Page = struct {
     }
 
     pub fn screenshot(self: *Page, output: []const u8, full_page: bool) !Value {
+        if (self.frame != null) return error.FrameCommandUnsupported;
         self.diagnostics.phase = .inspect;
         // A never-active headed tab may have no compositor frame. A scoped
         // screencast requests frames without activating it or changing metrics.

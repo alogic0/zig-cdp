@@ -492,3 +492,42 @@ step; Chrome opens the files when the upload runs.
 
 See the [complete native browser workflow](browser-workflow.md) for the combined
 scenario, verification commands and consumer adoption boundary.
+
+## Frames
+
+```sh
+zig-cdp --endpoint "$endpoint" frames --tab "$tab_id"
+zig-cdp --endpoint "$endpoint" snapshot --tab "$tab_id" --frame "$frame_id"
+zig-cdp --endpoint "$endpoint" fill --tab "$tab_id" --frame "$frame_id" \
+  --role textbox --name Name --value Ada
+zig-cdp --endpoint "$endpoint" click --tab "$tab_id" --frame "$frame_id" \
+  --role button --name Save
+```
+
+`frames` returns `id`, `parent`, `name`, `url` and the flattened CDP `session`
+(empty for the main page connection). Record IDs from discovery, never list
+positions. `--frame ID` works in owned and endpoint modes and selects the
+document for evaluation, CSS/text/role locators, snapshots, normal input,
+upload/download, wait and drag. `open` and `reload` navigate only that frame.
+No frame option means the main document. Missing/detached frames fail without
+falling back to another document. Context tracking uses unique context IDs to
+avoid reused numeric execution-context IDs after process changes.
+
+Same-process, out-of-process and nested frames are supported. Named pointer
+actions translate local geometry through frame borders and scale to the tab's
+viewport, checking ancestor clipping and occlusion. Rotated, skewed, reflected
+or 3-D frame transforms fail with `FrameTransformUnsupported` before input.
+Raw `protocol Input.*` calls retain CDP's top-level viewport coordinates;
+`DOM.getDocument` and DOM/accessibility inspection use the selected frame.
+`Page.getLayoutMetrics` reports top-level tab metrics.
+
+Pass `--frame` on the outer `sequence` command; steps inherit it and cannot
+change documents independently. Screenshots and tab/browser lifecycle remain
+top-level operations: their `--frame` option is rejected, and frame-scoped
+sequences reject screenshots before their first step. A frame's page can still
+navigate or remove it during an operation; failures are reported without replay.
+
+Routing retains at most 64 related target sessions and 256 default execution
+contexts. Frame discovery is capped at 128 frames and 16 nesting levels.
+Attachments preserve desktop focus. Owned sessions keep interception on related
+frame sessions and apply the existing explicit origin allowlist.

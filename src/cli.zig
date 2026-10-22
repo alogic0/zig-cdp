@@ -14,6 +14,7 @@ const help =
     \\                                Own a persistent browser (foreground)
     \\status                           Browser version, URL, and session state
     \\tabs                             List tab IDs, titles, URLs, and selection
+    \\frames                           List frame IDs, parents, names and URLs
     \\new-tab [URL] [--background]     Create and select a tab (default blank)
     \\switch-tab ID [--background]    Select a tab; background is session-only
     \\close-tab [ID]                   Close a tab (default selected)
@@ -49,7 +50,7 @@ const help =
     \\
     \\LOCATOR: --selector CSS | --role ROLE [--name NAME] | --text TEXT
     \\Element commands also accept LOCATOR instead of positional CSS.
-    \\Options: --tab ID, --timeout MS, --limit BYTES, --state STATE
+    \\Options: --tab ID, --frame ID, --timeout MS, --limit BYTES, --state STATE
     \\         --value TEXT | --value-file PATH|- (fill/select)
     \\         --script PATH|- (eval), --key KEY (press)
     \\         --full-page | --viewport (screenshot), --out PATH
@@ -182,6 +183,9 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
                 if (value_supplied or !(std.mem.eql(u8, command, "protocol") and std.mem.eql(u8, arg, "--params") or std.mem.eql(u8, command, "sequence") and std.mem.eql(u8, arg, "--file"))) return error.InvalidOption;
                 value_supplied = true;
                 try args.append(a, try readInput(a, init.io, value));
+            } else if (std.mem.eql(u8, arg, "--frame")) {
+                if (input.frame != null) return error.InvalidOption;
+                input.frame = value;
             } else if (std.mem.eql(u8, arg, "--tab")) {
                 if (input.tab != null) return error.InvalidOption;
                 input.tab = value;

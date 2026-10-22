@@ -17,6 +17,7 @@ pub const Request = struct {
     args: []const []const u8 = &.{},
     locator: ?Agent.Query = null,
     tab: ?[]const u8 = null,
+    frame: ?[]const u8 = null,
     timeout_ms: ?u32 = null,
     limit: usize = 20_000,
     state: []const u8 = "visible",
@@ -32,11 +33,18 @@ pub const Request = struct {
 const max_request = 1024 * 1024;
 const max_response = 16 * 1024 * 1024;
 
-const Op = enum { status, tabs, @"new-tab", @"switch-tab", @"close-tab", allow, open, reload, content, eval, click, fill, text, read, snapshot, select, press, wait, timeout, screenshot, upload, download, drag, protocol, sequence, pause, close };
+const Op = enum { status, tabs, frames, @"new-tab", @"switch-tab", @"close-tab", allow, open, reload, content, eval, click, fill, text, read, snapshot, select, press, wait, timeout, screenshot, upload, download, drag, protocol, sequence, pause, close };
 
 pub fn operation(input: Request) anyerror!Op {
     const op = std.meta.stringToEnum(Op, input.command) orelse return error.UnknownCommand;
     const argc = input.args.len;
+    if (input.frame) |frame| {
+        if (frame.len == 0 or frame.len > 256) return error.InvalidFrame;
+        switch (op) {
+            .status, .open, .reload, .content, .eval, .click, .fill, .text, .read, .snapshot, .select, .press, .wait, .upload, .download, .drag, .protocol, .sequence, .pause => {},
+            else => return error.InvalidOption,
+        }
+    }
     if (input.files.len > 64) return error.FileCountExceeded;
     if (input.files.len > 0 and op != .upload) return error.InvalidOption;
     if (op != .drag and (input.destination != null or input.hold_ms != 300 or input.steps != 12)) return error.InvalidOption;
@@ -61,6 +69,9 @@ pub fn operation(input: Request) anyerror!Op {
         if (argc != 1) return error.WrongArgumentCount;
         var parsed = try parseSequence(std.heap.page_allocator, input.args[0]);
         defer parsed.deinit();
+        if (input.frame != null) for (parsed.value.steps) |step| {
+            if (std.mem.eql(u8, step.command, "screenshot")) return error.FrameCommandUnsupported;
+        };
     }
     if (op == .pause) {
         if (argc != 1) return error.WrongArgumentCount;
@@ -86,7 +97,7 @@ pub fn operation(input: Request) anyerror!Op {
         return op;
     }
     const valid = switch (op) {
-        .status, .tabs, .reload, .close, .read, .snapshot => argc == 0,
+        .status, .tabs, .frames, .reload, .close, .read, .snapshot => argc == 0,
         .@"new-tab" => argc <= 1,
         .@"close-tab" => argc <= 1 and !(input.tab != null and argc != 0),
         .fill, .select, .download => argc == 2,
@@ -107,7 +118,7 @@ pub fn parseSequence(a: A, raw: []const u8) anyerror!std.json.Parsed(Sequence) {
     if (parsed.value.version != 1 or parsed.value.steps.len == 0 or parsed.value.steps.len > 128) return error.InvalidSequence;
     for (parsed.value.steps) |*step| {
         step.modern = true;
-        if (step.tab != null or step.timeout_ms != null or step.background) return error.InvalidSequence;
+        if (step.tab != null or step.frame != null or step.timeout_ms != null or step.background) return error.InvalidSequence;
         const op = std.meta.stringToEnum(Op, step.command) orelse return error.InvalidSequence;
         switch (op) {
             .open, .reload, .content, .eval, .click, .fill, .text, .read, .snapshot, .select, .press, .wait, .screenshot, .upload, .drag, .protocol, .pause => {},
@@ -281,14 +292,16 @@ fn awaitDisconnect(io: std.Io, stream: Stream) !void {
 }
 
 pub fn failure(a: A, input: Request, err: anyerror, diagnostics: Agent.Diagnostics) ![]const u8 {
-    return J.json(a, .{ .ok = false, .err = @errorName(err), .command = input.command, .tab = input.tab, .@"error" = .{ .code = @errorName(err), .phase = diagnostics.phase, .match_count = diagnostics.match_count, .action = diagnostics.action, .step = diagnostics.step, .steps = diagnostics.steps, .input_release = diagnostics.input_release } });
+    return J.json(a, .{ .ok = false, .err = @errorName(err), .command = input.command, .tab = input.tab, .frame = input.frame, .@"error" = .{ .code = @errorName(err), .phase = diagnostics.phase, .match_count = diagnostics.match_count, .action = diagnostics.action, .step = diagnostics.step, .steps = diagnostics.steps, .input_release = diagnostics.input_release } });
 }
 
 pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
     const op = try operation(input);
+    if (input.frame) |frame| if (page.frame == null or !std.mem.eql(u8, page.frame.?, frame)) try page.setFrame(frame);
     const query: Agent.Query = input.locator orelse .{ .selector = if (input.args.len > 0) input.args[0] else "body" };
     const index: usize = if (input.locator == null) 1 else 0;
     switch (op) {
+        .frames => return page.frames(),
         .drag => try page.drag(query, input.destination orelse .{ .selector = input.args[1] }, input.hold_ms, input.steps),
         .protocol => return page.protocol(input.args[0], if (input.params) |params| try J.parse(page.a, try J.json(page.a, params)) else try J.parse(page.a, input.args[1])),
         .pause => try page.delay(try std.fmt.parseInt(u32, input.args[0], 10)),
@@ -559,7 +572,9 @@ const State = struct {
     fn commandPage(self: *State, p: *J.Page, diagnostics: *Agent.Diagnostics) !Agent.Page {
         const remaining = self.deadline_ms - 100 - std.Io.Clock.awake.now(p.io).toMilliseconds();
         if (remaining <= 0) return error.CommandTimeout;
-        return Agent.Page.init(self.a, p.io, &p.socket, @intCast(remaining), diagnostics);
+        var page = try Agent.Page.init(self.a, p.io, &p.socket, @intCast(remaining), diagnostics);
+        page.targets = p.frame_targets;
+        return page;
     }
     fn execute(self: *State, a: A, input: Request, diagnostics: *Agent.Diagnostics, deadline: i64) !V {
         self.a = a;
@@ -617,6 +632,7 @@ const State = struct {
         }
         var page = try self.commandPage(p, diagnostics);
         defer page.deinit();
+        if (input.frame) |frame| try page.setFrame(frame);
         switch (op) {
             .sequence => return executeSequence(&page, input.args[0], &p.allow_unload),
             .status => return J.val(a, .{ .browser = self.browser.version, .url = J.str(try page.eval("location.href")), .tab_id = p.target, .origins = self.origins.items, .timeout_ms = self.timeout_ms, .profile = self.browser.profile, .persistent_profile = self.browser.persistent_profile, .port = self.browser.client.port }),

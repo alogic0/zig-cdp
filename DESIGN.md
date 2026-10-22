@@ -169,3 +169,14 @@ remain outside its explicitly supported page-protocol set.
 Upload validates all bounded client-resolved paths before one selection update.
 The library repeats validation and verifies a file input with the required
 multiple attribute. Files and form submission remain consumer-owned.
+
+Flattened target routing keeps one serialized reader and unique request IDs per
+wire connection. Event callbacks inherit their session route when replying.
+Related frame/context storage is bounded and reclaimed on detach. Agent requests
+borrow the owned page's persistent tracker or create a temporary endpoint tracker.
+The owned page installs its existing Fetch policy on new iframe sessions before
+resuming them. Frame selection uses default unique execution contexts and checks
+membership in the tab's frame hierarchy; it never selects unrelated page targets.
+Named pointer input maps frame-local geometry through ancestor owners, checks
+occlusion, and dispatches at the root viewport. Raw input remains explicit CDP
+coordinates. Browser/tab lifecycle and screenshots retain top-level scope.

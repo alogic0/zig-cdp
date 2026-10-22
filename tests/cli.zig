@@ -27,6 +27,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .name = "discovery", .run = @import("cli_faults.zig").run },
         .{ .name = "endpoint", .run = @import("cli_endpoint.zig").run },
         .{ .name = "resources", .run = @import("cli_resources.zig").run },
+        .{ .name = "frames", .run = @import("cli_frames.zig").run },
         .{ .name = "workflow", .run = @import("cli_workflow.zig").run },
         .{ .name = "upload", .run = @import("cli_upload.zig").run },
         .{ .name = "input", .run = @import("cli_input.zig").run },

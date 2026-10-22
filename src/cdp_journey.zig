@@ -293,10 +293,20 @@ pub const Browser = struct {
         errdefer socket.close();
         const p = try a.create(Page);
         p.* = .{ .browser = self, .a = a, .io = self.io, .socket = socket, .context = try a.dupe(u8, context), .owns_context = owns_context, .target = try a.dupe(u8, id), .origins = origins };
+        errdefer if (p.frame_targets) |tree| {
+            tree.deinit();
+            std.heap.page_allocator.destroy(tree);
+        };
         p.socket.event_context = p;
         p.socket.event_handler = Page.onEvent;
         _ = try p.command("Page.enable", .{});
-        _ = try p.command("Runtime.enable", .{});
+        if (!self.capture_observations) {
+            const tree = try std.heap.page_allocator.create(cdp.target_tree.Tree);
+            tree.* = .{ .a = std.heap.page_allocator, .socket = &p.socket, .pause_new = true, .configure = Page.configureFrame };
+            errdefer std.heap.page_allocator.destroy(tree);
+            try tree.start();
+            p.frame_targets = tree;
+        } else _ = try p.command("Runtime.enable", .{});
         if (self.capture_observations) _ = try p.command("Network.enable", .{ .maxTotalBufferSize = 64 * 1024 * 1024, .maxResourceBufferSize = 20 * 1024 * 1024, .maxPostDataSize = 1024 * 1024, .enableDurableMessages = true });
         _ = try p.command("Fetch.enable", .{ .patterns = .{.{ .urlPattern = "*", .requestStage = "Request" }} });
         if (self.headless)
@@ -405,6 +415,13 @@ pub const Page = struct {
     next_handle: usize = 0,
     closed: bool = false,
     allow_unload: bool = false,
+    frame_targets: ?*cdp.target_tree.Tree = null,
+
+    fn configureFrame(_: ?*anyopaque, tree: *cdp.target_tree.Tree, sid: ?[]const u8) anyerror!void {
+        var arena = std.heap.ArenaAllocator.init(tree.a);
+        defer arena.deinit();
+        _ = try tree.call(arena.allocator(), sid, "Fetch.enable", .{ .patterns = .{.{ .urlPattern = "*", .requestStage = "Request" }} });
+    }
 
     pub fn close(self: *Page) void {
         if (self.closed) return;
@@ -417,6 +434,11 @@ pub const Page = struct {
     pub fn detach(self: *Page) void {
         if (self.closed) return;
         self.closed = true;
+        if (self.frame_targets) |tree| {
+            tree.deinit();
+            std.heap.page_allocator.destroy(tree);
+            self.frame_targets = null;
+        }
         self.socket.close();
     }
     pub fn command(self: *Page, method: []const u8, params: anytype) !V {

@@ -103,6 +103,7 @@ fn execute(a: A, io: std.Io, endpoint: []const u8, input: session.Request, diagn
     if (remaining <= 0) return error.CommandTimeout;
     var page = try Agent.Page.init(a, io, &socket, @intCast(remaining), diagnostics);
     defer page.deinit();
+    if (input.frame) |frame| try page.setFrame(frame);
     if (op == .status) return J.val(a, .{ .ownership = "external", .tab_id = id, .url = try page.eval("location.href"), .port = connection.client.port });
     if (op == .download) {
         const query = input.locator orelse Agent.Query{ .selector = input.args[0] };
