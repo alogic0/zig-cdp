@@ -88,4 +88,18 @@ pub fn exercise(client: H.Client, download_url: ?[]const u8) !void {
     try H.equal(window, .{ .w = viewport.width, .h = viewport.height });
     try H.equal(document, .{ .w = full.width, .h = full.height });
     try H.check(full.height >= 3000, "full-page screenshot includes tall document");
+    _ = try client.result(&.{ "content", "<style>body{margin:0}#grid{display:grid;grid-template-columns:repeat(4,1fr)}.item{height:600px}@media(max-width:500px){#grid{grid-template-columns:1fr}}</style><div id=grid><div class=item>A</div><div class=item>B</div><div class=item>C</div><div class=item>D</div></div>" });
+    const before_geometry = try client.result(&.{ "eval", "({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})" });
+    const mobile_vp_path = try c.path("mobile-viewport.png");
+    const mobile_full_path = try c.path("mobile-full.png");
+    const mobile_vp_res = try client.result(&.{ "screenshot", "--out", mobile_vp_path, "--viewport", "--emulate-viewport", "390x844" });
+    try H.equal(try H.field(mobile_vp_res, "viewport_cleanup"), "complete");
+    try H.equal(try client.result(&.{ "eval", "({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})" }), before_geometry);
+    const mobile_full_res = try client.result(&.{ "screenshot", "--out", mobile_full_path, "--full-page", "--emulate-viewport", "390x844" });
+    try H.equal(try H.field(mobile_full_res, "viewport_cleanup"), "complete");
+    try H.equal(try client.result(&.{ "eval", "({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})" }), before_geometry);
+    const mobile_vp_dim = try H.S.png.dimensions(try c.read(mobile_vp_path));
+    const mobile_full_dim = try H.S.png.dimensions(try c.read(mobile_full_path));
+    try H.check(mobile_vp_dim.width == 390 and mobile_vp_dim.height == 844, "emulated viewport screenshot matches 390x844");
+    try H.check(mobile_full_dim.width >= 370 and mobile_full_dim.width <= 390 and mobile_full_dim.height >= 2400, "responsive full-page screenshot reflows narrow grid");
 }

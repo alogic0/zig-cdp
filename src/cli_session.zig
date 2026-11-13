@@ -30,6 +30,7 @@ pub const Request = struct {
     destination: ?Agent.Query = null,
     hold_ms: u32 = 300,
     steps: u32 = 12,
+    emulate_viewport: ?Agent.Viewport = null,
 };
 const max_request = 1024 * 1024;
 const max_response = 16 * 1024 * 1024;
@@ -86,6 +87,10 @@ pub fn operation(input: Request) anyerror!Op {
     if (!std.mem.eql(u8, input.state, "visible") and !std.mem.eql(u8, input.state, "hidden") and !std.mem.eql(u8, input.state, "attached") and !std.mem.eql(u8, input.state, "detached")) return error.InvalidWaitState;
     if (!std.mem.eql(u8, input.state, "visible") and (op != .wait or input.locator == null)) return error.InvalidOption;
     if (input.full_page and op != .screenshot) return error.InvalidOption;
+    if (input.emulate_viewport) |vp| {
+        if (op != .screenshot and op != .sequence) return error.InvalidOption;
+        try vp.validate();
+    }
     if (input.background and op != .@"new-tab" and op != .@"switch-tab") return error.InvalidOption;
     if (input.tab != null and (op == .close or op == .allow or op == .timeout or op == .tabs or op == .workers or op == .@"new-tab" or op == .@"switch-tab")) return error.InvalidOption;
     if (input.limit == 0 or input.limit > 1024 * 1024) return error.InvalidLimit;
@@ -134,7 +139,7 @@ pub fn parseSequence(a: A, raw: []const u8) anyerror!std.json.Parsed(Sequence) {
     if (parsed.value.version != 1 or parsed.value.steps.len == 0 or parsed.value.steps.len > 128) return error.InvalidSequence;
     for (parsed.value.steps) |*step| {
         step.modern = true;
-        if (step.tab != null or step.frame != null or step.shadows.len > 0 or step.timeout_ms != null or step.background) return error.InvalidSequence;
+        if (step.tab != null or step.frame != null or step.shadows.len > 0 or step.timeout_ms != null or step.background or step.emulate_viewport != null) return error.InvalidSequence;
         const op = std.meta.stringToEnum(Op, step.command) orelse return error.InvalidSequence;
         switch (op) {
             .open, .reload, .content, .eval, .click, .fill, .text, .read, .snapshot, .select, .press, .wait, .screenshot, .upload, .drag, .protocol, .pause => {},
@@ -280,7 +285,7 @@ fn respond(a: A, io: std.Io, stream: Stream, state: *State) ![]const u8 {
     const budget = parsed.value.timeout_ms orelse @as(u32, @intCast(state.timeout_ms));
     try select.concurrent(.value, State.execute, .{ state, a, parsed.value, &diagnostics, @as(i64, @intCast(std.Io.Clock.awake.now(io).toMilliseconds())) + budget });
     try select.concurrent(.budget, std.Io.sleep, .{ io, .fromMilliseconds(@as(i64, budget) + 300), .awake });
-    if (std.mem.eql(u8, input.command, "drag") or std.mem.eql(u8, input.command, "sequence")) try select.concurrent(.disconnected, awaitDisconnect, .{ io, stream });
+    if (std.mem.eql(u8, input.command, "drag") or std.mem.eql(u8, input.command, "sequence") or input.emulate_viewport != null) try select.concurrent(.disconnected, awaitDisconnect, .{ io, stream });
     const result = try select.await();
     select.cancelDiscard();
     joined = true;
@@ -309,7 +314,7 @@ fn awaitDisconnect(io: std.Io, stream: Stream) !void {
 
 pub fn failure(a: A, input: Request, err: anyerror, diagnostics: Agent.Diagnostics) ![]const u8 {
     const exception = if (err == error.BrowserEvaluationFailed) diagnostics.exceptionInfo() else null;
-    return J.json(a, .{ .ok = false, .err = @errorName(err), .command = input.command, .tab = input.tab, .frame = input.frame, .@"error" = .{ .code = @errorName(err), .phase = diagnostics.phase, .match_count = diagnostics.match_count, .action = diagnostics.action, .step = diagnostics.step, .steps = diagnostics.steps, .input_release = diagnostics.input_release, .exception = exception } });
+    return J.json(a, .{ .ok = false, .err = @errorName(err), .command = input.command, .tab = input.tab, .frame = input.frame, .@"error" = .{ .code = @errorName(err), .phase = diagnostics.phase, .match_count = diagnostics.match_count, .action = diagnostics.action, .step = diagnostics.step, .steps = diagnostics.steps, .input_release = diagnostics.input_release, .viewport_cleanup = diagnostics.viewport_cleanup, .exception = exception } });
 }
 
 pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
@@ -324,7 +329,7 @@ pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
         .drag => try page.drag(query, input.destination orelse .{ .selector = input.args[1] }, input.hold_ms, input.steps),
         .protocol => return page.protocol(input.args[0], if (input.params) |params| try J.parse(page.a, try J.json(page.a, params)) else try J.parse(page.a, input.args[1])),
         .pause => try page.delay(try std.fmt.parseInt(u32, input.args[0], 10)),
-        .sequence => return executeSequence(page, input.args[0], null),
+        .sequence => return executeSequence(page, input.args[0], input.emulate_viewport, null),
         .snapshot => return page.snapshot(input.limit),
         .read => return page.read(input.locator, input.limit),
         .text => return page.text(query),
@@ -338,8 +343,18 @@ pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
         .wait => if (input.locator == null) try page.waitExpression(input.args[0]) else try page.wait(query, input.state),
         .upload => try page.uploadFiles(query, if (input.files.len == 0) &.{input.args[index]} else input.files),
         .screenshot => {
+            const scoped_viewport = input.emulate_viewport != null;
+            if (input.emulate_viewport) |vp| try page.emulateViewport(vp);
+            defer if (scoped_viewport) page.clearViewport();
             const result = try page.screenshot(input.args[0], input.full_page);
-            return if (input.modern) result else .{ .string = input.args[0] };
+            if (scoped_viewport) {
+                page.clearViewport();
+                if (page.diagnostics.viewport_cleanup == .incomplete) return error.ViewportCleanupIncomplete;
+            }
+            if (!input.modern) return .{ .string = input.args[0] };
+            var out = result;
+            try out.object.put(page.a, "viewport_cleanup", .{ .string = @tagName(page.diagnostics.viewport_cleanup) });
+            return out;
         },
         .open => {
             const url = J.str(try page.eval(try page.a.print("new URL({s}).href", .{try J.json(page.a, input.args[0])})));
@@ -360,13 +375,15 @@ pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
     return .{ .bool = true };
 }
 
-fn executeSequence(page: *Agent.Page, raw: []const u8, unload: ?*bool) anyerror!V {
+fn executeSequence(page: *Agent.Page, raw: []const u8, emulate_viewport: ?Agent.Viewport, unload: ?*bool) anyerror!V {
     var parsed = try parseSequence(page.a, raw);
     defer parsed.deinit();
     for (parsed.value.steps) |step| if (std.mem.eql(u8, step.command, "upload")) try Agent.validateFiles(page.io, if (step.files.len > 0) step.files else &.{step.args[if (step.locator == null) @as(usize, 1) else 0]});
     const reports = try page.a.alloc(Agent.Diagnostics.Step, parsed.value.steps.len);
     for (parsed.value.steps, 0..) |step, i| reports[i] = .{ .index = i, .command = try page.a.dupe(u8, step.command) };
     page.diagnostics.steps = reports;
+    if (emulate_viewport) |vp| try page.emulateViewport(vp);
+    defer page.clearViewport();
     defer page.input.release(page);
     var results: std.ArrayList(V) = .empty;
     var output_bytes: usize = 0;
@@ -403,8 +420,10 @@ fn executeSequence(page: *Agent.Page, raw: []const u8, unload: ?*bool) anyerror!
         try results.append(page.a, result);
     }
     page.input.release(page);
+    page.clearViewport();
     if (page.diagnostics.input_release == .incomplete) return error.InputReleaseIncomplete;
-    return J.val(page.a, .{ .steps = reports, .results = results.items, .input_release = page.diagnostics.input_release });
+    if (page.diagnostics.viewport_cleanup == .incomplete) return error.ViewportCleanupIncomplete;
+    return J.val(page.a, .{ .steps = reports, .results = results.items, .input_release = page.diagnostics.input_release, .viewport_cleanup = page.diagnostics.viewport_cleanup });
 }
 
 const State = struct {
@@ -604,6 +623,7 @@ const State = struct {
         if (remaining <= 0) return error.CommandTimeout;
         var page = try Agent.Page.init(self.a, p.io, &p.socket, @intCast(remaining), diagnostics);
         page.targets = p.frame_targets;
+        page.restore_headless_viewport = self.browser.headless;
         return page;
     }
     fn execute(self: *State, a: A, input: Request, diagnostics: *Agent.Diagnostics, deadline: i64) !V {
@@ -666,7 +686,7 @@ const State = struct {
         if (input.frame) |frame| try page.setFrame(frame);
         try page.setShadows(input.shadows);
         switch (op) {
-            .sequence => return executeSequence(&page, input.args[0], &p.allow_unload),
+            .sequence => return executeSequence(&page, input.args[0], input.emulate_viewport, &p.allow_unload),
             .status => return J.val(a, .{ .browser = self.browser.version, .url = J.str(try page.eval("location.href")), .tab_id = p.target, .origins = self.origins.items, .timeout_ms = self.timeout_ms, .profile = self.browser.profile, .persistent_profile = self.browser.persistent_profile, .port = self.browser.client.port }),
             .open => {
                 const url = J.str(try page.eval(try a.print("new URL({s}).href", .{try J.json(a, input.args[0])})));

@@ -212,3 +212,30 @@ test "bounded exception diagnostic summary strips controls and preserves UTF-8" 
     try std.testing.expectEqual(@as(?i64, 9), rejected.column);
     try std.testing.expect(!rejected.truncated);
 }
+
+test "viewport emulation parser enforces bounded dimensions" {
+    const Vp = cdp.agent.Viewport;
+    try std.testing.expectEqual(Vp{ .width = 160, .height = 160 }, try Vp.parse("160x160"));
+    try std.testing.expectEqual(Vp{ .width = 390, .height = 844 }, try Vp.parse("390x844"));
+    try std.testing.expectEqual(Vp{ .width = 7680, .height = 4320 }, try Vp.parse("7680x4320"));
+    for ([_][]const u8{
+        "",
+        "390",
+        "390x",
+        "x844",
+        "390X844",
+        "390x844x1",
+        "0x0",
+        "0390x844",
+        "390x0844",
+        "+390x844",
+        "-390x844",
+        "159x844",
+        "7681x844",
+        "390x159",
+        "390x4321",
+        "390 x 844",
+    }) |bad| {
+        try std.testing.expectError(error.InvalidViewport, Vp.parse(bad));
+    }
+}

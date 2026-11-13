@@ -24,6 +24,34 @@ pub const Query = struct {
     }
 };
 
+pub const Viewport = struct {
+    pub const min_width: u32 = 160;
+    pub const max_width: u32 = 7680;
+    pub const min_height: u32 = 160;
+    pub const max_height: u32 = 4320;
+    width: u32,
+    height: u32,
+
+    pub fn parse(raw: []const u8) !Viewport {
+        const sep = std.mem.indexOfScalar(u8, raw, 'x') orelse return error.InvalidViewport;
+        const left = raw[0..sep];
+        const right = raw[sep + 1 ..];
+        if (left.len == 0 or right.len == 0 or left[0] == '0' or right[0] == '0' or std.mem.indexOfScalar(u8, right, 'x') != null) return error.InvalidViewport;
+        for (left) |ch| if (ch < '0' or ch > '9') return error.InvalidViewport;
+        for (right) |ch| if (ch < '0' or ch > '9') return error.InvalidViewport;
+        const vp: Viewport = .{
+            .width = std.fmt.parseInt(u32, left, 10) catch return error.InvalidViewport,
+            .height = std.fmt.parseInt(u32, right, 10) catch return error.InvalidViewport,
+        };
+        try vp.validate();
+        return vp;
+    }
+
+    pub fn validate(self: Viewport) !void {
+        if (self.width < min_width or self.width > max_width or self.height < min_height or self.height > max_height) return error.InvalidViewport;
+    }
+};
+
 pub const Diagnostics = struct {
     pub const max_exception_summary = 512;
     pub const Action = enum { not_started, possibly_dispatched, completed };
@@ -39,6 +67,7 @@ pub const Diagnostics = struct {
     step: ?usize = null,
     steps: []Step = &.{},
     input_release: enum { not_needed, complete, incomplete } = .not_needed,
+    viewport_cleanup: enum { not_needed, complete, incomplete } = .not_needed,
     has_exception: bool = false,
     exception_buf: [max_exception_summary]u8 = undefined,
     exception_len: u16 = 0,
@@ -223,6 +252,8 @@ pub const Page = struct {
     owns_targets: bool = false,
     frame: ?[]const u8 = null,
     shadows: []const []const u8 = &.{},
+    viewport_emulated: bool = false,
+    restore_headless_viewport: bool = false,
 
     pub fn init(a: A, io: std.Io, socket: *cdp.WsSession, timeout_ms: u32, diagnostics: *Diagnostics) !Page {
         var random: [8]u8 = undefined;
@@ -238,6 +269,7 @@ pub const Page = struct {
 
     pub fn deinit(self: *Page) void {
         self.input.finish(self);
+        self.clearViewport();
         defer if (self.owns_targets) self.targets.?.deinit();
         // Release remote handles even after the operation budget expires. A
         // failed cleanup seals this socket rather than reusing uncertain state.
@@ -249,6 +281,54 @@ pub const Page = struct {
             if (s.active and !self.socket.failed) _ = tree.call(self.a, s.id.slice(), "Runtime.releaseObjectGroup", .{ .objectGroup = self.group }) catch {};
         };
         self.socket.deadline_ms = self.previous_deadline;
+    }
+
+    pub fn emulateViewport(self: *Page, vp: Viewport) !void {
+        try vp.validate();
+        self.diagnostics.viewport_cleanup = .incomplete;
+        self.viewport_emulated = true;
+        _ = try cdp.target_tree.callSession(self.a, self.socket, null, "Emulation.setDeviceMetricsOverride", .{
+            .width = vp.width,
+            .height = vp.height,
+            .deviceScaleFactor = 1,
+            .mobile = false,
+        });
+    }
+
+    pub fn clearViewport(self: *Page) void {
+        if (!self.viewport_emulated) return;
+        self.diagnostics.viewport_cleanup = .incomplete;
+        const protection = self.io.swapCancelProtection(.blocked);
+        defer _ = self.io.swapCancelProtection(protection);
+        const previous = self.socket.deadline_ms;
+        self.socket.deadline_ms = now(self.io) + 500;
+        defer self.socket.deadline_ms = previous;
+        if (self.socket.failed) return;
+        var scratch = std.heap.ArenaAllocator.init(self.socket.alloc);
+        defer scratch.deinit();
+        const a = scratch.allocator();
+        const need_screencast = !self.restore_headless_viewport and !self.input.frames;
+        if (need_screencast) _ = cdp.target_tree.callSession(a, self.socket, null, "Page.startScreencast", .{ .format = "png", .everyNthFrame = 1 }) catch return;
+        defer if (need_screencast and !self.socket.failed) {
+            _ = cdp.target_tree.callSession(a, self.socket, null, "Page.stopScreencast", .{}) catch {};
+        };
+        _ = cdp.target_tree.callSession(a, self.socket, null, "Emulation.clearDeviceMetricsOverride", .{}) catch return;
+        if (self.restore_headless_viewport) {
+            _ = cdp.target_tree.callSession(a, self.socket, null, "Emulation.setDeviceMetricsOverride", .{
+                .width = 1280,
+                .height = 720,
+                .deviceScaleFactor = 1,
+                .mobile = false,
+            }) catch return;
+        } else {
+            // Hidden tabs defer SynchronizeVisualProperties unless capturing a frame.
+            _ = cdp.target_tree.callSession(a, self.socket, null, "Page.captureScreenshot", .{
+                .format = "png",
+                .clip = .{ .x = 0, .y = 0, .width = 1, .height = 1, .scale = 1 },
+            }) catch return;
+        }
+        self.viewport_emulated = false;
+        self.diagnostics.viewport_cleanup = .complete;
     }
 
     pub fn command(self: *Page, method: []const u8, params: anytype) anyerror!Value {

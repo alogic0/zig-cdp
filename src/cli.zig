@@ -57,6 +57,7 @@ const help =
     \\         --value TEXT | --value-file PATH|- (fill/select)
     \\         --script PATH|- (eval), --key KEY (press)
     \\         --full-page | --viewport (screenshot), --out PATH
+    \\         --emulate-viewport WIDTHxHEIGHT (screenshot/sequence, 160..7680x160..4320, auto-cleared)
     \\
     \\PATH is a new session directory for serve, the same directory for clients.
     \\--user-data-dir uses an existing, unlocked profile and preserves it on close.
@@ -96,7 +97,7 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
     _ = iterator.next();
     const first = iterator.next() orelse unreachable;
     if (std.mem.eql(u8, first, "--version")) {
-        try std.Io.File.stdout().writeStreamingAll(init.io, "zig-cdp 0.4.0\n");
+        try std.Io.File.stdout().writeStreamingAll(init.io, "zig-cdp 0.5.0\n");
         return 0;
     }
     const borrowed = std.mem.eql(u8, first, "--endpoint");
@@ -228,6 +229,9 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
             } else if (std.mem.eql(u8, arg, "--timeout")) {
                 if (input.timeout_ms != null) return error.InvalidOption;
                 input.timeout_ms = std.fmt.parseInt(u32, value, 10) catch return error.InvalidTimeout;
+            } else if (std.mem.eql(u8, arg, "--emulate-viewport")) {
+                if (input.emulate_viewport != null or (!std.mem.eql(u8, command, "screenshot") and !std.mem.eql(u8, command, "sequence"))) return error.InvalidOption;
+                input.emulate_viewport = try Agent.Viewport.parse(value);
             } else if (std.mem.eql(u8, arg, "--limit")) {
                 if (!std.mem.eql(u8, command, "read") and !std.mem.eql(u8, command, "snapshot") and !std.mem.eql(u8, command, "shadow-roots")) return error.InvalidOption;
                 input.limit = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit;
@@ -400,8 +404,10 @@ fn writeHelp(a: std.mem.Allocator, io: std.Io, topic: []const u8) !void {
             \\Run a version-1 JSON sequence (1..128 steps, <= 1 MiB) on one connection and budget.
             \\Steps: open, reload, content, eval, click, fill, text, read, snapshot, select,
             \\       press, wait, screenshot, upload, drag, protocol, pause
-            \\Options: --tab ID, --frame ID, --shadow HOST_CSS (repeatable), --timeout MS, --out PATH
-            \\Held mouse/key input is released automatically on completion, failure, or cancellation.
+            \\Options: --tab ID, --frame ID, --shadow HOST_CSS (repeatable), --timeout MS,
+            \\         --emulate-viewport WIDTHxHEIGHT (160..7680x160..4320, auto-cleared), --out PATH
+            \\Held mouse/key input and temporary viewport overrides are cleared automatically on
+            \\completion, failure, or cancellation without activating or resizing the window.
             \\
         );
         return;
@@ -412,7 +418,9 @@ fn writeHelp(a: std.mem.Allocator, io: std.Io, topic: []const u8) !void {
             \\       zig-cdp --endpoint URL screenshot --tab ID [PATH] [OPTIONS]
             \\
             \\Capture a PNG screenshot of the top-level tab.
-            \\Options: --viewport | --full-page, --out PATH, --tab ID, --timeout MS
+            \\Options: --viewport | --full-page, --emulate-viewport WIDTHxHEIGHT (160..7680x160..4320),
+            \\         --out PATH, --tab ID, --timeout MS
+            \\--emulate-viewport applies deviceScaleFactor 1, mobile false and clears overrides before exit.
             \\
         );
         return;

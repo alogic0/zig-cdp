@@ -211,3 +211,15 @@ can consume a short action budget before input is dispatched. Locator lookup
 returns a unique DOM handle directly and resolves both drag endpoints before
 compositor setup. Wide shadow discovery counts sibling tags once per parent;
 its node-limit check does not require quadratic sibling scans.
+
+CLI help flags (`-h`, `--help`, and `help [COMMAND]`) resolve before session or
+endpoint validation, while arguments after `--` stay literal. Evaluation
+failures store a bounded 512-byte UTF-8 exception summary and source position
+inline in `Diagnostics` so temporary polling arenas never dangle. Observer body
+capture accepts up to eight validated exact method/URL pairs before creating the
+capture file. Scoped `--emulate-viewport WIDTHxHEIGHT` (`160..7680` ×
+`160..4320`) on `screenshot` and `sequence` applies temporary device metrics on
+the root page connection and unconditionally clears them with
+`Emulation.clearDeviceMetricsOverride` under a bounded cleanup allowance (using
+a 1×1 compositor capture on hidden non-headless tabs so Blink receives restored
+visual properties without activating or resizing the window).

@@ -7,8 +7,8 @@ pub fn run(c: H.Context) !void {
         .{ .argv = &.{"-h"}, .needle = "--endpoint" },
         .{ .argv = &.{ "protocol", "--help" }, .needle = "Page.getLayoutMetrics" },
         .{ .argv = &.{ "observe", "-h" }, .needle = "--body-method" },
-        .{ .argv = &.{ "screenshot", "--help" }, .needle = "--full-page" },
-        .{ .argv = &.{ "sequence", "-h" }, .needle = "--file" },
+        .{ .argv = &.{ "screenshot", "--help" }, .needle = "--emulate-viewport" },
+        .{ .argv = &.{ "sequence", "-h" }, .needle = "--emulate-viewport" },
         .{ .argv = &.{ "serve", "-h" }, .needle = "--user-data-dir" },
         .{ .argv = &.{ "eval", "--help" }, .needle = "eval JAVASCRIPT" },
         .{ .argv = &.{ "help", "protocol" }, .needle = "Input.dispatchMouseEvent" },
@@ -30,12 +30,16 @@ pub fn run(c: H.Context) !void {
     try H.S.files.expectMode(c.io, .{ .path = server.path, .mode = 0o700 });
     try H.equal(try H.field(try client.result(&.{"status"}), "url"), "about:blank");
     const negatives = [_]struct { args: []const []const u8, code: []const u8 }{
-        .{ .args = &.{"serve"}, .code = "PathAlreadyExists" },                                   .{ .args = &.{"unknown"}, .code = "UnknownCommand" },
-        .{ .args = &.{ "fill", "#input" }, .code = "WrongArgumentCount" },                       .{ .args = &.{ "allow", "https://example.invalid/path" }, .code = "InvalidOrigin" },
-        .{ .args = &.{ "allow", "http://user:pass@example.invalid" }, .code = "InvalidOrigin" }, .{ .args = &.{ "timeout", "0" }, .code = "InvalidTimeout" },
-        .{ .args = &.{ "open", "https://example.invalid/" }, .code = "OriginNotAllowed" },
+        .{ .args = &.{"serve"}, .code = "PathAlreadyExists" },                                                                                  .{ .args = &.{"unknown"}, .code = "UnknownCommand" },
+        .{ .args = &.{ "fill", "#input" }, .code = "WrongArgumentCount" },                                                                      .{ .args = &.{ "allow", "https://example.invalid/path" }, .code = "InvalidOrigin" },
+        .{ .args = &.{ "allow", "http://user:pass@example.invalid" }, .code = "InvalidOrigin" },                                                .{ .args = &.{ "timeout", "0" }, .code = "InvalidTimeout" },
+        .{ .args = &.{ "open", "https://example.invalid/" }, .code = "OriginNotAllowed" },                                                      .{ .args = &.{ "eval", "1", "--emulate-viewport", "390x844" }, .code = "InvalidOption" },
+        .{ .args = &.{ "screenshot", "shot.png", "--emulate-viewport", "390x844", "--emulate-viewport", "390x844" }, .code = "InvalidOption" }, .{ .args = &.{ "screenshot", "shot.png", "--emulate-viewport", "100x844" }, .code = "InvalidViewport" },
+        .{ .args = &.{ "screenshot", "shot.png", "--emulate-viewport", "8000x844" }, .code = "InvalidViewport" },                               .{ .args = &.{ "screenshot", "shot.png", "--emulate-viewport", "390x5000" }, .code = "InvalidViewport" },
+        .{ .args = &.{ "screenshot", "shot.png", "--emulate-viewport", "390X844" }, .code = "InvalidViewport" },
     };
     for (negatives) |n| _ = try client.failure(n.args, n.code);
+    try H.equal(try H.field(try client.run(&.{ "sequence", "--file", "-" }, .{ .ok = false, .stdin = "{\"version\":1,\"steps\":[{\"command\":\"screenshot\",\"args\":[\"shot.png\"],\"emulate_viewport\":{\"width\":390,\"height\":844}}]}" }), "err"), "InvalidSequence");
     try H.equal(try H.field(try c.raw(server.path, "not json\n"), "err"), "InvalidRequest");
     try H.equal(try H.field(try c.raw(server.path, "{\"command\":\"eval\",\"args\":[4]}\n"), "err"), "InvalidRequest");
     const oversized = try c.a.alloc(u8, 1024 * 1024 + 2);

@@ -9,7 +9,7 @@ ownership comes from [`zig-process`](https://github.com/alogic0/zig-process),
 downloaded automatically at a pinned revision and verified by its package hash.
 Node.js and a browser-driver service are not required.
 
-Version **0.4.0**, licensed under the [MIT License](LICENSE).
+Version **0.5.0**, licensed under the [MIT License](LICENSE).
 
 ## Install
 
@@ -30,8 +30,10 @@ The executable is `zig-out/bin/zig-cdp`. For library use, see the
 Use the **CLI through shell/exec tools** for browser control. You do not need to
 write or compile a Zig program for each task. This executable is not an MCP
 server. Build it once with `zig build -Doptimize=ReleaseSafe` from this repository
-if `zig-out/bin/zig-cdp` is missing. Run `zig-out/bin/zig-cdp --help` to discover
-the available commands. After rebuilding, start a new `serve` process to use new
+if `zig-out/bin/zig-cdp` is missing. Run `zig-out/bin/zig-cdp --help` (or
+subcommand help such as `zig-out/bin/zig-cdp protocol --help` or `observe -h`,
+which need no `--session` or `--endpoint`) to discover commands and options.
+After rebuilding, start a new `serve` process to use new
 commands; an already-running owner keeps its original executable code.
 
 ### Use an existing browser
@@ -60,10 +62,13 @@ browser behind your current window. In owned sessions, `switch-tab ID
 still requests foreground activation. Ordinary attachment and recovery do not.
 
 Observe across separate action commands with `observe --tab ID --out NEW_PATH`.
-Wait for its readiness record before acting. See [capture options and bounds](docs/cli.md#observation-across-commands), including exact method/URL response-body filters.
+Wait for its readiness record before acting. See [capture options and bounds](docs/cli.md#observation-across-commands), including repeatable exact `--body-method` / `--body-url` response-body filter pairs (up to 8 pairs).
 
 Use `drag`, `protocol --params FILE|-`, and `sequence --file FILE|-` for held
-input and bounded action sequences. See [the sequence format and cleanup contract](docs/cli.md#held-input-and-sequences).
+input and bounded action sequences. Pass `--emulate-viewport WIDTHxHEIGHT` (for
+example `390x844`) on `screenshot` or `sequence` for scoped, auto-clearing
+responsive layout checks that restore device metrics before returning without
+activating or resizing the browser window. See [the sequence format and cleanup contract](docs/cli.md#held-input-and-sequences).
 
 For multiple uploads, repeat `--file PATH` on `upload`; the complete list is
 validated before replacing the file input selection.
@@ -275,8 +280,9 @@ processes. Building, using and testing require no Python interpreter. It uses
 pinned shared HTTP fixtures and test-support packages and always executes its
 browser scenarios, even when compilation is cached. To run one group, use
 `zig build test-cli -- --case resources`; the groups are `contract`, `agent`,
-`lifecycle`, `discovery`, `endpoint`, `resources`, `workflow`, `upload`, `input`,
-and `observe`. The separate `test-focus` gate runs the `focus` group with Xvfb,
+`lifecycle`, `shutdown`, `discovery`, `endpoint`, `resources`, `shadows`,
+`frames`, `workflow`, `upload`, `input`, `workers`, and `observe`. The separate
+`test-focus` gate runs the `focus` group with Xvfb,
 Openbox and `xprop` to observe native focus throughout the background workflow.
 `test-headed` requires `xvfb-run` and tests
 window resizing on a separate virtual X display. The independent package check

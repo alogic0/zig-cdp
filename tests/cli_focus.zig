@@ -67,6 +67,21 @@ pub fn run(c: H.Context) !void {
             _ = try page.result(&.{ "screenshot", mode, try c.path("background.png"), "--timeout", "3000" });
             try unchanged(c, window, sentinel, original);
         }
+        const bg_geometry = try page.result(&.{ "eval", "({w:innerWidth,h:innerHeight,dpr:devicePixelRatio,ow:outerWidth,oh:outerHeight})" });
+        for ([_][]const u8{ "--viewport", "--full-page" }) |mode| {
+            const shot_path = try c.path("background-emulated.png");
+            const shot_res = try page.result(&.{ "screenshot", mode, shot_path, "--emulate-viewport", "390x844", "--timeout", "3000" });
+            try H.equal(try H.field(shot_res, "viewport_cleanup"), "complete");
+            const dim = try H.S.png.dimensions(try c.read(shot_path));
+            try H.check(if (H.eql(u8, mode, "--viewport")) (dim.width == 390 and dim.height == 844) else (dim.width >= 370 and dim.width <= 390), "background emulated screenshot dimensions");
+            try unchanged(c, window, sentinel, original);
+            try H.equal(try page.result(&.{ "eval", "({w:innerWidth,h:innerHeight,dpr:devicePixelRatio,ow:outerWidth,oh:outerHeight})" }), bg_geometry);
+        }
+        const focus_seq_res = try H.field(try page.run(&.{ "sequence", "--file", "-", "--emulate-viewport", "390x844" }, .{ .stdin = "{\"version\":1,\"steps\":[{\"command\":\"eval\",\"args\":[\"innerWidth===390&&innerHeight===844\"]}]}" }), "result");
+        try H.equal(try H.field(focus_seq_res, "viewport_cleanup"), "complete");
+        try H.equal((try H.field(focus_seq_res, "results")).array.items[0], true);
+        try unchanged(c, window, sentinel, original);
+        try H.equal(try page.result(&.{ "eval", "({w:innerWidth,h:innerHeight,dpr:devicePixelRatio,ow:outerWidth,oh:outerHeight})" }), bg_geometry);
         _ = try page.failure(&.{ "click", "--selector", "#missing", "--timeout", "100" }, "ElementNotFound");
         try unchanged(c, window, sentinel, original);
         try @import("cli_input.zig").exercise(page);

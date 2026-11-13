@@ -45,6 +45,12 @@ test "independent consumer launches and evaluates" {
     try command.click(.{ .role = "button", .name = "Component" });
     try command.setShadows(&.{});
     command.frame = null;
+    command.restore_headless_viewport = true;
+    try command.emulateViewport(try Agent.Viewport.parse("390x844"));
+    try std.testing.expectEqual(@as(i64, 390), J.number(try command.eval("innerWidth")));
+    command.clearViewport();
+    try std.testing.expectEqual(.complete, diagnostics.viewport_cleanup);
+    try std.testing.expectEqual(@as(i64, 1280), J.number(try command.eval("innerWidth")));
     var connection = try Agent.Connection.connect(arena.allocator(), std.testing.io, try arena.allocator().print("http://127.0.0.1:{d}", .{browser.client.port}));
     defer connection.disconnect();
     try std.testing.expect((try connection.tabs()).array.items.len > 0);

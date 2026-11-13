@@ -174,10 +174,18 @@ hidden and detached waits succeed when no element matches.
 `fill` and `select` accept `--value-file PATH` or `--value-file -` to read stdin.
 `eval --script PATH|-` accepts a file or stdin as an alternative to inline code.
 Input files are limited to 1 MiB; trailing newlines are preserved. Use `--` before
-positional arguments that begin with two hyphens. `--out PATH` saves command JSON
-to a private file. Screenshots accept `--out PATH` and either `--viewport` or
-`--full-page`; a full-page capture uses the document's content dimensions and
-excludes browser scrollbars. Output parent directories must exist.
+positional arguments that begin with two hyphens. `-h`, `--help`, and
+`help [COMMAND]` (for example `zig-cdp protocol --help`, `zig-cdp observe -h`,
+`zig-cdp screenshot --help`, or `zig-cdp sequence -h`) print usage to stdout and
+exit 0 without requiring `--session` or `--endpoint`; `-h` and `--help` after
+`--` remain literal positional arguments. `--out PATH` saves command JSON
+to a private file. Screenshots accept `--out PATH`, either `--viewport` or
+`--full-page`, and optional `--emulate-viewport WIDTHxHEIGHT` (`160..7680` ×
+`160..4320`); a full-page capture uses the document's content dimensions and
+excludes browser scrollbars. `--emulate-viewport` sets `deviceScaleFactor: 1`
+and `mobile: false` on the target page connection and unconditionally runs
+`Emulation.clearDeviceMetricsOverride` before returning, without activating the
+tab or resizing the OS/browser window. Output parent directories must exist.
 
 Keyboard combinations accept Control/Ctrl, Alt, Meta and Shift, followed by an
 ASCII character or Enter, Tab, Escape, Backspace, Delete, ArrowLeft/Up/Right/Down,
@@ -241,9 +249,16 @@ Failures exit with status 1 and report an error name:
 ```
 
 Command errors also include an `error` object containing `code`, `phase`,
-`match_count`, and `action`. The action field is `not_started`,
+`match_count`, `action`, `step`, `steps`, `input_release`, `viewport_cleanup`,
+and `exception`. The action field is `not_started`,
 `possibly_dispatched`, or `completed`; it describes input dispatch, not an
-application assertion. Inspect the page before repeating a write after an
+application assertion. When `eval` (or an `eval` step inside `sequence`) fails
+with `BrowserEvaluationFailed`, `error.exception` (and the failing step's
+`exception` in `error.steps`) reports `{summary, line, column, truncated}` with
+0-based `line`/`column` when available and a UTF-8-valid `summary` capped at 512
+bytes (ASCII C0/DEL control bytes other than `\n` and `\t` stripped;
+`truncated: true` when clipped). Other error codes keep `exception: null`.
+Inspect the page before repeating a write after an
 uncertain result. Ordinary locator failures leave the session usable.
 
 Diagnostics from browser operations go to the owner's stderr. A rejected command,
@@ -325,6 +340,11 @@ attached command's budget (30 seconds by default).
 
 Attached inspection and actions do not change device metrics, inject persistent
 helpers, set a download directory, or install background network interception.
+Passing `--emulate-viewport WIDTHxHEIGHT` on `screenshot` or `sequence`
+explicitly opts into a temporary device-metrics override (`160..7680` ×
+`160..4320`, `deviceScaleFactor: 1`, `mobile: false`) that is unconditionally
+cleared with `Emulation.clearDeviceMetricsOverride` on completion, error,
+timeout, or signal cancellation without activating or resizing the window.
 An explicit `download LOCATOR PATH` temporarily intercepts attachment responses
 to copy up to 20 MiB to PATH, then removes its interception. Blob/data downloads
 are copied from the page; Chrome may also save its usual copy. Other requests
@@ -359,7 +379,8 @@ record (`ok:true, ready:true`), then issue actions from separate processes:
 ```sh
 zig-cdp --endpoint "$endpoint" observe --tab "$tab_id" \
   --events console,exceptions,network --duration 30000 --out "$capture" \
-  --body-method POST --body-url 'https://example.test/api/save'
+  --body-method POST --body-url 'https://example.test/api/save' \
+  --body-method GET --body-url 'https://example.test/api/detail?id=42'
 # After readiness, from another shell/tool invocation:
 zig-cdp --endpoint "$endpoint" click --tab "$tab_id" --role button --name Save
 ```
@@ -385,7 +406,10 @@ are not recursively expanded. Metadata omits headers, credentials, query,
 fragment and payloads. Console/exception text itself may contain secrets.
 
 Both `--body-method` (uppercase) and `--body-url` (exact full HTTP(S) URL,
-including query) are required for body capture. Matching is done before URL
+including query, with no credentials or fragment) are required for body capture.
+You may repeat `--body-method METHOD --body-url EXACT_URL` pairs (up to 8 pairs)
+in a single `observe` invocation; unpaired options, invalid methods or URLs, and
+more than 8 pairs fail before the capture file is created. Matching is done before URL
 redaction. Bodies are retrieved after completion, never by repeating the
 request. A body record reports `complete`, `unavailable`, `oversized`, or
 `binary`; only complete UTF-8 text is emitted. Chrome can evict a body before
@@ -399,6 +423,7 @@ Limits (options may lower these ceilings):
 | `--max-events` output records | 4096 | 4096 |
 | `--max-bytes` capture bytes | 8388608 | 8388608 |
 | `--body-limit` decoded body bytes | 1048576 | 1048576 |
+| `--body-method` / `--body-url` pairs | 0 | 8 |
 | `--max-targets` attached child targets | 64 | 64 |
 
 At most 4096 active requests are retained. Individual incoming events are
@@ -456,8 +481,11 @@ state across steps. Example file:
 The document is at most 1 MiB and contains 1–128 steps, all checked before
 execution. Step fields match command requests: `command`, string-array `args`,
 optional `locator`, `destination`, `hold_ms`, `steps`, `params`, `limit`, `state`,
-and `full_page`. Step-local tabs, deadlines, background flags, nested sequences,
-owner commands and downloads are rejected. Supported named steps are open,
+and `full_page`. Step-local tabs, deadlines, background flags, viewport overrides,
+nested sequences,
+owner commands and downloads are rejected; pass `--emulate-viewport WIDTHxHEIGHT`
+(`160..7680` × `160..4320`) on the outer `sequence` command when responsive
+metrics should span its steps. Supported named steps are open,
 reload, content, eval, click, fill, text, read, snapshot, select, press, wait,
 screenshot, upload and drag; protocol and pause complete the list. A pause is
 0–10000 ms. Relative file paths resolve against the invoking client. There is
@@ -465,16 +493,26 @@ one overall deadline and an 8 MiB result budget. No loops, branching, host code,
 result binding or automatic replay are provided. Validation cannot predict
 future page state; actionability is checked when each step executes.
 
-Results contain per-step results and zero-based step reports. A failure includes
-`error.step`, reports for every step (`action` and optional `err`), and
-`input_release`: `not_needed`, `complete`, or `incomplete`. Later steps remain
+Results contain per-step results, zero-based step reports, `input_release`, and
+`viewport_cleanup`. A failure includes
+`error.step`, reports for every step (`action`, optional `err`, and optional
+`exception` on `BrowserEvaluationFailed`), `input_release`: `not_needed`,
+`complete`, or `incomplete`, and `viewport_cleanup`: `not_needed`, `complete`,
+or `incomplete`. Later steps remain
 `not_started`. Cleanup attempts mouse/key release on the same target for up to
-200 ms; a lost connection reports incomplete release without replacing the
+200 ms and clears any temporary `--emulate-viewport` override with
+`Emulation.clearDeviceMetricsOverride` within a 500 ms cleanup allowance (using
+a brief compositor frame capture on hidden tabs so Blink synchronizes restored
+visual properties without window activation); a lost connection reports
+incomplete cleanup without replacing the
 original error. Up to one mouse button and 16 keys may be held. Outstanding
-input is also released at successful sequence completion; use a sequence to
-hold input between calls. Endpoint SIGINT/SIGTERM cancels and performs this
-cleanup. Disconnecting an owned drag/sequence client cancels its in-flight work
-and releases input. Inspect page state and step reports before retrying a write.
+input and temporary viewport overrides are also cleared at successful sequence
+completion; use a sequence to
+hold input or emulated metrics between calls. Endpoint SIGINT/SIGTERM cancels
+and performs this
+cleanup. Disconnecting an owned drag, sequence, or emulated-viewport client
+cancels its in-flight work and runs cleanup. Inspect page state and step reports
+before retrying a write.
 
 ## Multiple-file upload
 

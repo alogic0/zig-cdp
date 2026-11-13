@@ -1,5 +1,60 @@
 # Current delivery
 
+## Usability and verification improvements completed (0.5.0), November 13, 2026
+
+The [plan](docs/plans/2026-11-13-eval-diagnostics-viewport-observe-help.md) is
+complete. Subcommand `-h` and `--help` are recognized anywhere in the argument
+list before `--session` or `--endpoint` validation, printing concise global or
+per-command usage to stdout and exiting `0`.
+
+`BrowserEvaluationFailed` on `eval` and `eval` steps inside `sequence` now
+includes a bounded `error.exception` object (`summary`, optional 0-based `line`
+and `column`, and `truncated`) extracted from CDP `exceptionDetails` in both
+synchronous `Runtime.evaluate` failures and rejected `Runtime.awaitPromise`
+results. Control characters are normalized, UTF-8 codepoint boundaries are
+preserved under the 512-byte cap, and all diagnostic buffers reclaim per
+command while preserving `ok: false`, `err: "BrowserEvaluationFailed"`, and all
+existing `error` fields.
+
+`observe` accepts up to 8 repeatable `--body-method METHOD --body-url EXACT_URL`
+pairs in a single pass. Argument parsing validates equal counts, uppercase HTTP
+methods, and exact `http://` or `https://` URLs before starting capture while
+preserving single-pair compatibility, `--body-limit`, `--max-bytes`, and
+`unavailable_bodies` accounting.
+
+`screenshot` and `sequence` accept `--emulate-viewport WIDTHxHEIGHT`
+(`160..7680` × `160..4320`, `deviceScaleFactor: 1`, `mobile: false`). Target
+page overrides run on the command's page connection without calling
+`Page.bringToFront` or resizing the OS window, and cleanup unconditionally
+invokes `Emulation.clearDeviceMetricsOverride` under a bounded 500 ms uncancelled
+budget (restoring `1280x720` on owned headless sessions and flushing visual
+properties via a brief screencast pulse on non-headless background tabs so Blink
+drops stale emulated dimensions immediately). `viewport_cleanup` (`not_needed`,
+`complete`, or `incomplete`) is reported on `screenshot`, `sequence`, and
+structured `error` envelopes, failing with `ViewportCleanupIncomplete` when
+transport loss prevents clearing.
+
+Verification with Zig 0.17.0 and Chrome 157.0.8103.38:
+
+| Check | Debug | ReleaseSafe |
+| --- | --- | --- |
+| Full native CLI, one allowed CPU | 14 scenario groups passed | 14 scenario groups passed |
+| Library and observer tests | 17/17 passed | 17/17 passed |
+| Compile, example and install | passed | passed |
+| Xvfb headed viewport, bounds and focus | 1/1 passed | 1/1 passed |
+| Independent exported-package consumer | 1/1 passed | 1/1 passed |
+
+`openbox` is not installed on this host, so `zig build test-focus` (which wraps
+`openbox --sm-disable`) was not runnable locally; headed background-tab viewport
+emulation/restoration, native `Browser.getWindowBounds`, `outerWidth`/`outerHeight`,
+and foreground `document.hasFocus()` preservation were verified under `xvfb-run`
+in `zig build test-headed`.
+
+Under the unchanged resource workload (720 inspections, 36 tab cycles, 12
+sequences, 12 frame/closed-shadow cycles, and related worker observation), owner
+RSS was 10,477,568 → 11,362,304 bytes in Debug and 4,186,112 → 4,902,912 bytes
+in ReleaseSafe; descriptors stayed 7 → 7 in both.
+
 ## Frames, shadows, workers and shutdown completed (0.4.0), October 22, 2026
 
 The [plan](docs/plans/2026-10-22-frames-shadows-workers.md) is complete.

@@ -65,9 +65,28 @@ test "headed tabs share their context window and follow resizing" {
         try sibling.wait("innerWidth>800 && innerWidth<=outerWidth && outerWidth<=902");
         _ = try sibling.eval("window.kept = 'same document'; true");
         sibling.close();
-        const attached = try browser.attachTab(sibling.target, page.context, &.{});
+        const attached = try browser.attachTabWithOptions(a, sibling.target, page.context, &.{}, .{ .background = true });
         defer attached.detach();
+        _ = try browser.command("Target.activateTarget", .{ .targetId = page.target });
+        _ = try page.command("Page.bringToFront", .{});
+        try page.wait("document.visibilityState === 'visible' && document.hasFocus()");
         try std.testing.expectEqualStrings("same document", J.str(try attached.eval("window.kept")));
+        const bounds_before = try J.json(a, try browser.command("Browser.getWindowBounds", .{ .windowId = window_id }));
+        const bg_before = try J.json(a, try attached.eval("({w:innerWidth,h:innerHeight,ow:outerWidth,oh:outerHeight})"));
+        {
+            var diag: @import("cdp").agent.Diagnostics = .{};
+            var cmd = try @import("cdp").agent.Page.init(a, io, &attached.socket, 3000, &diag);
+            defer cmd.deinit();
+            try cmd.emulateViewport(try @import("cdp").agent.Viewport.parse("390x844"));
+            try std.testing.expectEqual(@as(i64, 390), J.number(try cmd.eval("innerWidth")));
+            try std.testing.expectEqual(@as(i64, 844), J.number(try cmd.eval("innerHeight")));
+            try std.testing.expect(J.boolean(try page.eval("document.visibilityState === 'visible' && document.hasFocus()")));
+            try std.testing.expectEqualStrings(bounds_before, try J.json(a, try browser.command("Browser.getWindowBounds", .{ .windowId = window_id })));
+            cmd.clearViewport();
+            try std.testing.expectEqual(.complete, diag.viewport_cleanup);
+        }
+        try std.testing.expectEqualStrings(bg_before, try J.json(a, try attached.eval("({w:innerWidth,h:innerHeight,ow:outerWidth,oh:outerHeight})")));
+        try std.testing.expectEqualStrings(bounds_before, try J.json(a, try browser.command("Browser.getWindowBounds", .{ .windowId = window_id })));
         try browser.closeTab(sibling.target);
         attached.detach();
         try std.testing.expect(J.boolean(try page.eval("true")));

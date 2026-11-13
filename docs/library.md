@@ -45,7 +45,8 @@ strict CSS/text actions, keyboard input, select/upload and screenshot operations
 Call its `deinit` before releasing the request allocator to release temporary
 remote objects. Returned JSON values borrow from that allocator. The socket is
 borrowed and must be used by only one task at a time; this layer never owns the
-browser process or changes its viewport, interception, or download policy.
+browser process or persistently changes its viewport, interception, or download
+policy.
 
 The journey API below retains its existing browser ownership contract.
 
@@ -319,3 +320,12 @@ The optional `configure` hook runs after Runtime is enabled and before a paused
 new target resumes. Session IDs passed to hooks are borrowed for that callback.
 Tree teardown detaches only its own sessions; it does not close worker targets.
 The finite JSONL observer and its signal/capture policy remain CLI-owned.
+
+`agent.Viewport.parse("390x844")` validates `160..7680` × `160..4320` CSS pixel
+dimensions. `Page.emulateViewport(vp)` applies a connection-scoped device
+metrics override without resizing or activating the window; `clearViewport()`
+(and `Page.deinit`) clears it under a bounded cleanup deadline and records
+`Diagnostics.viewport_cleanup`. When `Page.eval` fails with
+`BrowserEvaluationFailed`, `Diagnostics.exception` carries a bounded UTF-8-safe
+`EvaluationException` summary, optional 0-based `line`/`column`, and `truncated`
+flag allocated in the Page's request allocator.
