@@ -2,10 +2,26 @@ const std = @import("std");
 const H = @import("cli_support.zig");
 const Fixture = @import("cli_fixture.zig").Fixture;
 pub fn run(c: H.Context) !void {
-    const report = try H.S.command.runReport(std.heap.page_allocator, c.io, .{ .run = .{ .spawn = .{ .argv = &.{ c.exe, "--help" } }, .stdout_limit = 65536, .stderr_limit = 65536, .timeout_ms = 5000 } });
-    defer report.deinit(std.heap.page_allocator);
-    try H.S.Diagnostic.expectExit(report, .{ .assertion = "CLI help", .code = 0 });
-    try H.check(std.mem.indexOf(u8, report.stdout, "--session") != null, "help describes sessions");
+    for ([_]struct { argv: []const []const u8, needle: []const u8 }{
+        .{ .argv = &.{"--help"}, .needle = "--session" },
+        .{ .argv = &.{"-h"}, .needle = "--endpoint" },
+        .{ .argv = &.{ "protocol", "--help" }, .needle = "Page.getLayoutMetrics" },
+        .{ .argv = &.{ "observe", "-h" }, .needle = "--body-method" },
+        .{ .argv = &.{ "screenshot", "--help" }, .needle = "--full-page" },
+        .{ .argv = &.{ "sequence", "-h" }, .needle = "--file" },
+        .{ .argv = &.{ "serve", "-h" }, .needle = "--user-data-dir" },
+        .{ .argv = &.{ "eval", "--help" }, .needle = "eval JAVASCRIPT" },
+        .{ .argv = &.{ "help", "protocol" }, .needle = "Input.dispatchMouseEvent" },
+        .{ .argv = &.{ "--endpoint", "http://127.0.0.1:1", "observe", "-h" }, .needle = "--duration" },
+        .{ .argv = &.{ "--session", "/nonexistent/zig-cdp-help-only", "protocol", "--help" }, .needle = "Accessibility.getFullAXTree" },
+    }) |h| {
+        const argv = try std.mem.concat(c.a, []const u8, &.{ &.{c.exe}, h.argv });
+        const report = try H.S.command.runReport(std.heap.page_allocator, c.io, .{ .run = .{ .spawn = .{ .argv = argv }, .stdout_limit = 65536, .stderr_limit = 65536, .timeout_ms = 5000 } });
+        defer report.deinit(std.heap.page_allocator);
+        try H.S.Diagnostic.expectExit(report, .{ .assertion = "CLI help", .code = 0 });
+        try H.check(std.mem.indexOf(u8, report.stdout, h.needle) != null, "help contains expected command usage");
+    }
+    try H.equal(try H.field(try c.invoke(&.{ "eval", "1+1" }, .{ .ok = false }), "err"), "ExpectedSessionOption");
     var server = try H.Session.start(c, "primary", &.{});
     defer server.deinit();
     var peer = try H.Session.start(c, "peer", &.{});
@@ -34,6 +50,8 @@ pub fn run(c: H.Context) !void {
     try client.expect(&.{ "text", "#result" }, "Sample 🧭");
     try client.expect(&.{ "eval", "events" }, [_]bool{ true, true });
     _ = try client.result(&.{ "wait", "document.querySelector('#result').textContent === 'Sample 🧭'" });
+    _ = try client.result(&.{ "fill", "--selector", "#name", "--", "--help" });
+    try client.expect(&.{ "eval", "document.querySelector('#name').value" }, "--help");
     try H.equal(try c.command(peer.path, &.{ "eval", "typeof window.events" }), "undefined");
     _ = try client.run(&.{ "screenshot", "shot.png" }, .{ .cwd = c.root });
     _ = try H.S.png.dimensions(try c.read(try c.path("shot.png")));

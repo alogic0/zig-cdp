@@ -64,7 +64,7 @@ const help =
     \\Chrome selects a free loopback port; readiness and status report that port.
     \\The default idle timeout is 900 seconds. Replies are JSON; failures exit 1.
     \\File paths are resolved from the client's current working directory.
-    \\Use --session before COMMAND; --help and --version need no session.
+    \\Use --session or --endpoint before COMMAND; -h/--help and --version need no session.
     \\--endpoint accepts loopback HTTP discovery or a browser WebSocket URL.
     \\Endpoint commands disconnect when done and never stop the browser.
     \\Use --tab ID for page operations; close-tab explicitly closes one tab.
@@ -84,13 +84,17 @@ pub fn main(init: std.process.Init) u8 {
 
 fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diagnostics) !u8 {
     const a = init.arena.allocator();
-    var iterator = std.process.Args.Iterator.init(init.minimal.args);
-    _ = iterator.next();
-    const first = iterator.next() orelse "--help";
-    if (std.mem.eql(u8, first, "--help") or std.mem.eql(u8, first, "help")) {
-        try std.Io.File.stdout().writeStreamingAll(init.io, help);
+    var all_args: std.ArrayList([]const u8) = .empty;
+    var raw = std.process.Args.Iterator.init(init.minimal.args);
+    _ = raw.next();
+    while (raw.next()) |arg| try all_args.append(a, arg);
+    if (helpTopic(all_args.items)) |topic| {
+        try writeHelp(a, init.io, topic);
         return 0;
     }
+    var iterator = std.process.Args.Iterator.init(init.minimal.args);
+    _ = iterator.next();
+    const first = iterator.next() orelse unreachable;
     if (std.mem.eql(u8, first, "--version")) {
         try std.Io.File.stdout().writeStreamingAll(init.io, "zig-cdp 0.4.0\n");
         return 0;
@@ -293,6 +297,112 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
     try std.Io.File.stdout().writeStreamingAll(init.io, reply);
     try std.Io.File.stdout().writeStreamingAll(init.io, "\n");
     return if (J.boolean(J.field(parsed.value, "ok"))) 0 else 1;
+}
+
+fn helpTopic(args: []const []const u8) ?[]const u8 {
+    if (args.len == 0) return "";
+    if (std.mem.eql(u8, args[0], "help")) {
+        return if (args.len >= 2 and !std.mem.startsWith(u8, args[1], "-")) args[1] else "";
+    }
+    var want_help = false;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--")) break;
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            want_help = true;
+            break;
+        }
+    }
+    if (!want_help) return null;
+    if (std.mem.eql(u8, args[0], "--session") or std.mem.eql(u8, args[0], "--endpoint")) {
+        if (args.len >= 3 and !std.mem.startsWith(u8, args[1], "-") and !std.mem.startsWith(u8, args[2], "-")) return args[2];
+        return "";
+    }
+    if (std.mem.eql(u8, args[0], "-h") or std.mem.eql(u8, args[0], "--help")) {
+        return if (args.len >= 2 and !std.mem.startsWith(u8, args[1], "-")) args[1] else "";
+    }
+    if (!std.mem.startsWith(u8, args[0], "-")) return args[0];
+    return "";
+}
+
+fn writeHelp(a: std.mem.Allocator, io: std.Io, topic: []const u8) !void {
+    const out = std.Io.File.stdout();
+    if (std.mem.eql(u8, topic, "protocol")) {
+        try out.writeStreamingAll(io,
+            \\Usage: zig-cdp --session PATH protocol METHOD [--params FILE|-] [OPTIONS]
+            \\       zig-cdp --endpoint URL protocol METHOD --tab ID [--params FILE|-] [OPTIONS]
+            \\
+            \\Dispatch one validated page-scoped CDP command. JSON object params default to {}.
+            \\Options: --tab ID, --frame ID, --timeout MS, --out PATH
+            \\Supported methods:
+            \\
+        );
+        for (Agent.protocol_methods) |method| {
+            try out.writeStreamingAll(io, try a.print("  {s}\n", .{method}));
+        }
+        return;
+    }
+    if (std.mem.eql(u8, topic, "observe")) {
+        try out.writeStreamingAll(io,
+            \\Usage: zig-cdp --session PATH observe --tab ID --out NEW_PATH [OPTIONS]
+            \\       zig-cdp --endpoint URL observe --tab ID --out NEW_PATH [OPTIONS]
+            \\
+            \\Independent finite JSONL capture; wait for the stdout readiness record before acting.
+            \\Options:
+            \\  --events console,exceptions,network   Event categories (default all three)
+            \\  --duration MS                         Capture window 1..120000 ms (default 30000)
+            \\  --body-method METHOD                  Uppercase HTTP method for response body capture
+            \\  --body-url EXACT_URL                  Exact http(s) URL for response body capture
+            \\  --max-events N                        Output record ceiling 1..4096 (default 4096)
+            \\  --max-bytes N                         Output byte ceiling 256..8388608 (default 8388608)
+            \\  --body-limit N                        Decoded body ceiling 1..1048576 (default 1048576)
+            \\  --targets page|related                Include recursive iframes and dedicated workers
+            \\  --worker ID                           Explicitly observe worker target ID (repeatable)
+            \\  --max-targets N                       Child target ceiling 1..64 (default 64)
+            \\
+        );
+        return;
+    }
+    if (std.mem.eql(u8, topic, "serve")) {
+        try out.writeStreamingAll(io,
+            \\Usage: zig-cdp --session NEW_DIR serve [OPTIONS]
+            \\
+            \\Start a foreground session owner on a new private directory and Unix socket.
+            \\Options:
+            \\  --allow ORIGIN          Allow HTTP(S) origin (repeatable)
+            \\  --browser PATH          Explicit Chrome/Chromium executable
+            \\  --headed                Show a visible browser window
+            \\  --user-data-dir PATH    Use an existing unlocked Chrome profile (preserved)
+            \\  --idle-timeout SECONDS  Idle shutdown 1..86400 s (default 900)
+            \\
+        );
+        return;
+    }
+    if (std.mem.eql(u8, topic, "sequence")) {
+        try out.writeStreamingAll(io,
+            \\Usage: zig-cdp --session PATH sequence --file FILE|- [OPTIONS]
+            \\       zig-cdp --endpoint URL sequence --tab ID --file FILE|- [OPTIONS]
+            \\
+            \\Run a version-1 JSON sequence (1..128 steps, <= 1 MiB) on one connection and budget.
+            \\Steps: open, reload, content, eval, click, fill, text, read, snapshot, select,
+            \\       press, wait, screenshot, upload, drag, protocol, pause
+            \\Options: --tab ID, --frame ID, --shadow HOST_CSS (repeatable), --timeout MS, --out PATH
+            \\Held mouse/key input is released automatically on completion, failure, or cancellation.
+            \\
+        );
+        return;
+    }
+    if (std.mem.eql(u8, topic, "screenshot")) {
+        try out.writeStreamingAll(io,
+            \\Usage: zig-cdp --session PATH screenshot [PATH] [OPTIONS]
+            \\       zig-cdp --endpoint URL screenshot --tab ID [PATH] [OPTIONS]
+            \\
+            \\Capture a PNG screenshot of the top-level tab.
+            \\Options: --viewport | --full-page, --out PATH, --tab ID, --timeout MS
+            \\
+        );
+        return;
+    }
+    try out.writeStreamingAll(io, help);
 }
 
 fn readInput(a: std.mem.Allocator, io: std.Io, path: []const u8) ![]const u8 {
