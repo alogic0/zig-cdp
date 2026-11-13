@@ -8,6 +8,12 @@ const A = std.mem.Allocator;
 const V = std.json.Value;
 const Io = std.Io;
 
+pub const max_body_filters = 8;
+pub const BodyFilter = struct {
+    method: []const u8,
+    url: []const u8,
+};
+
 pub const Options = struct {
     tab: []const u8 = "",
     out: []const u8 = "",
@@ -16,8 +22,7 @@ pub const Options = struct {
     max_events: usize = 4096,
     max_bytes: usize = 8 * 1024 * 1024,
     body_limit: usize = 1024 * 1024,
-    body_url: ?[]const u8 = null,
-    body_method: ?[]const u8 = null,
+    body_filters: []const BodyFilter = &.{},
     related: bool = false,
     workers: []const []const u8 = &.{},
     max_targets: usize = 64,
@@ -51,13 +56,15 @@ pub fn validate(o: Options) !void {
     }
     var it = std.mem.splitScalar(u8, o.events, ',');
     while (it.next()) |event| if (!eq(event, "console") and !eq(event, "exceptions") and !eq(event, "network")) return error.InvalidEvents;
-    if ((o.body_url == null) != (o.body_method == null)) return error.BodyFilterRequired;
-    if (o.body_url) |url| {
-        if (!selected(o.events, "network") or url.len > 8192) return error.InvalidBodyFilter;
-        const uri = std.Uri.parse(url) catch return error.InvalidBodyFilter;
-        if ((!eq(uri.scheme, "http") and !eq(uri.scheme, "https")) or uri.user != null or uri.password != null or uri.fragment != null) return error.InvalidBodyFilter;
-        if (o.body_method.?.len == 0 or o.body_method.?.len > 32) return error.InvalidBodyFilter;
-        for (o.body_method.?) |ch| if (ch < 'A' or ch > 'Z') return error.InvalidBodyFilter;
+    if (o.body_filters.len > max_body_filters) return error.InvalidLimit;
+    if (o.body_filters.len > 0 and !selected(o.events, "network")) return error.InvalidBodyFilter;
+    for (o.body_filters) |filter| {
+        if (filter.url.len == 0 or filter.url.len > 8192) return error.InvalidBodyFilter;
+        const uri = std.Uri.parse(filter.url) catch return error.InvalidBodyFilter;
+        const host = uri.host orelse return error.InvalidBodyFilter;
+        if ((!eq(uri.scheme, "http") and !eq(uri.scheme, "https")) or host.isEmpty() or uri.user != null or uri.password != null or uri.fragment != null) return error.InvalidBodyFilter;
+        if (filter.method.len == 0 or filter.method.len > 32) return error.InvalidBodyFilter;
+        for (filter.method) |ch| if (ch < 'A' or ch > 'Z') return error.InvalidBodyFilter;
     }
 }
 pub fn run(a: A, backing: A, io: Io, target: []const u8, borrowed: bool, o: Options) !u8 {
@@ -134,6 +141,12 @@ const Capture = struct {
         self.requests.deinit(self.a);
         for (self.bodies.items) |id| self.a.free(id);
         self.bodies.deinit(self.a);
+    }
+    fn matchesBody(self: *const Capture, verb: []const u8, url: []const u8) bool {
+        for (self.options.body_filters) |filter| {
+            if (eq(filter.url, url) and eq(filter.method, verb)) return true;
+        }
+        return false;
     }
     fn remove(self: *Capture, id: []const u8) void {
         if (self.requests.fetchRemove(id)) |kv| self.freeRequest(kv.value);
@@ -323,7 +336,7 @@ const Capture = struct {
                     self.dropped += 1;
                     return error.RequestLimitExceeded;
                 }
-                const r: Request = .{ .key = try self.a.dupe(u8, key), .origin = try copyOrigin(self.a, self.origin), .id = try self.a.dupe(u8, id), .method = try self.a.dupe(u8, verb), .url = try self.a.dupe(u8, url), .frame = try self.a.dupe(u8, J.str(J.field(p, "frameId"))), .loader = try self.a.dupe(u8, J.str(J.field(p, "loaderId"))), .hop = hop, .body = if (self.options.body_url) |filter| eq(filter, url) and eq(self.options.body_method.?, verb) else false, .mime = try self.a.dupe(u8, "") };
+                const r: Request = .{ .key = try self.a.dupe(u8, key), .origin = try copyOrigin(self.a, self.origin), .id = try self.a.dupe(u8, id), .method = try self.a.dupe(u8, verb), .url = try self.a.dupe(u8, url), .frame = try self.a.dupe(u8, J.str(J.field(p, "frameId"))), .loader = try self.a.dupe(u8, J.str(J.field(p, "loaderId"))), .hop = hop, .body = self.matchesBody(verb, url), .mime = try self.a.dupe(u8, "") };
                 try self.requests.put(self.a, r.key, r);
                 try self.write(a, "request", .{ .request_id = id, .hop = hop, .method = verb, .url = try safeUrl(a, url), .frame = r.frame, .loader = r.loader, .timestamp = J.field(p, "timestamp"), .type = J.field(p, "type") });
             } else if (self.requests.getPtr(key)) |r| {
@@ -416,18 +429,23 @@ test "request identity and detach cleanup are scoped by CDP session" {
         @memcpy(s.kind.bytes[0..6], "worker");
         s.kind.len = 6;
     }
-    var capture: Capture = .{ .a = a, .io = io, .file = file, .options = .{ .tab = "root", .body_url = "http://fixture/body", .body_method = "POST" }, .ready = true, .tree = &tree };
+    var capture: Capture = .{ .a = a, .io = io, .file = file, .options = .{ .tab = "root", .body_filters = &.{ .{ .method = "POST", .url = "http://fixture/body" }, .{ .method = "GET", .url = "http://fixture/status" } } }, .ready = true, .tree = &tree };
     defer capture.deinit();
     for ([_][]const u8{ "a", "b" }) |sid| {
         const raw = try J.json(a, .{ .method = "Network.requestWillBeSent", .sessionId = sid, .params = .{ .requestId = "same-id", .request = .{ .method = "POST", .url = "http://fixture/body" } } });
         defer a.free(raw);
         try Capture.event(&capture, &socket, raw);
     }
-    try std.testing.expectEqual(@as(usize, 2), capture.requests.count());
+    const second_pair = try J.json(a, .{ .method = "Network.requestWillBeSent", .sessionId = "b", .params = .{ .requestId = "status-id", .request = .{ .method = "GET", .url = "http://fixture/status" } } });
+    defer a.free(second_pair);
+    try Capture.event(&capture, &socket, second_pair);
+    try Capture.event(&capture, &socket, "{\"method\":\"Network.loadingFinished\",\"sessionId\":\"b\",\"params\":{\"requestId\":\"status-id\"}}");
+    try std.testing.expectEqual(@as(usize, 3), capture.requests.count());
     try Capture.event(&capture, &socket, "{\"method\":\"Network.loadingFinished\",\"sessionId\":\"b\",\"params\":{\"requestId\":\"same-id\"}}");
-    try std.testing.expectEqualStrings("b:same-id", capture.bodies.items[0]);
+    try std.testing.expectEqualStrings("b:status-id", capture.bodies.items[0]);
+    try std.testing.expectEqualStrings("b:same-id", capture.bodies.items[1]);
     try Capture.event(&capture, &socket, "{\"method\":\"Target.detachedFromTarget\",\"params\":{\"sessionId\":\"a\"}}");
-    try std.testing.expectEqual(@as(usize, 1), capture.requests.count());
+    try std.testing.expectEqual(@as(usize, 2), capture.requests.count());
     try std.testing.expect(capture.requests.contains("b:same-id"));
     try std.testing.expectEqual(@as(usize, 1), capture.unavailable);
     const bytes = try temp.dir.readFileAlloc(io, "events.jsonl", a, .limited(10000));
@@ -438,4 +456,25 @@ test "request identity and detach cleanup are scoped by CDP session" {
     // A late event whose detached slot was reused must never become page data.
     try std.testing.expectError(error.UnknownTargetSession, Capture.event(&capture, &socket, "{\"method\":\"Runtime.consoleAPICalled\",\"sessionId\":\"unknown\",\"params\":{}}"));
     try std.testing.expectEqual(@as(usize, 1), capture.dropped);
+}
+
+test "body filter validation enforces uppercase methods exact URLs and pair limit" {
+    const valid_eight = [_]BodyFilter{
+        .{ .method = "GET", .url = "http://127.0.0.1:4180/a?x=1" },
+        .{ .method = "POST", .url = "http://127.0.0.1:4180/b" },
+        .{ .method = "PUT", .url = "https://example.test/c" },
+        .{ .method = "PATCH", .url = "https://example.test/d" },
+        .{ .method = "DELETE", .url = "https://example.test/e" },
+        .{ .method = "GET", .url = "https://example.test/f" },
+        .{ .method = "POST", .url = "https://example.test/g" },
+        .{ .method = "GET", .url = "https://example.test/h" },
+    };
+    try validate(.{ .tab = "t", .out = "o", .body_filters = &valid_eight });
+    const too_many = valid_eight ++ [_]BodyFilter{.{ .method = "GET", .url = "https://example.test/i" }};
+    try std.testing.expectError(error.InvalidLimit, validate(.{ .tab = "t", .out = "o", .body_filters = &too_many }));
+    try std.testing.expectError(error.InvalidBodyFilter, validate(.{ .tab = "t", .out = "o", .body_filters = &.{.{ .method = "post", .url = "https://example.test/a" }} }));
+    try std.testing.expectError(error.InvalidBodyFilter, validate(.{ .tab = "t", .out = "o", .body_filters = &.{.{ .method = "GET", .url = "ftp://example.test/a" }} }));
+    try std.testing.expectError(error.InvalidBodyFilter, validate(.{ .tab = "t", .out = "o", .body_filters = &.{.{ .method = "GET", .url = "https://example.test/a#frag" }} }));
+    try std.testing.expectError(error.InvalidBodyFilter, validate(.{ .tab = "t", .out = "o", .body_filters = &.{.{ .method = "GET", .url = "http://" }} }));
+    try std.testing.expectError(error.InvalidBodyFilter, validate(.{ .tab = "t", .out = "o", .events = "console", .body_filters = &.{.{ .method = "GET", .url = "https://example.test/a" }} }));
 }

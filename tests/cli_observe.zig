@@ -90,6 +90,85 @@ fn exercise(client: H.Client, origin: []const u8, name: []const u8) !void {
     }
     try H.equal(try client.result(&.{ "eval", "({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})" }), geometry);
     _ = try client.failure(&.{ "observe", "--out", path, "--duration", "10" }, "PathAlreadyExists");
+    try exerciseMultiPair(client, origin, name);
+}
+fn exerciseMultiPair(client: H.Client, origin: []const u8, name: []const u8) !void {
+    const c = client.c;
+    const path = try c.path(try c.a.print("{s}-multi.jsonl", .{name}));
+    const save_url = try c.a.print("{s}/api/save?step=1", .{origin});
+    const reject_url = try c.a.print("{s}/api/reject", .{origin});
+    const detail_url = try c.a.print("{s}/api/detail?item=7", .{origin});
+    const unmatched_detail = try c.a.print("{s}/api/detail?item=8", .{origin});
+    var observer = try start(client, try c.a.print("{s}-multi", .{name}), &.{
+        "--out",         path,
+        "--duration",    "10000",
+        "--body-method", "POST",
+        "--body-url",    save_url,
+        "--body-url",    reject_url,
+        "--body-method", "POST",
+        "--body-method", "GET",
+        "--body-url",    detail_url,
+    });
+    defer observer.deinit();
+    try ready(c, &observer);
+    _ = try client.result(&.{ "open", origin });
+    _ = try client.result(&.{ "eval", try c.a.print(
+        "Promise.all([" ++
+            "fetch({s},{{method:'POST',body:'one'}}).then(r=>r.text())," ++
+            "fetch({s},{{method:'POST'}}).then(r=>r.text())," ++
+            "fetch({s}).then(r=>r.text())," ++
+            "fetch({s}).then(r=>r.text())," ++
+            "fetch({s}).then(r=>r.text())" ++
+            "]).then(()=>true)",
+        .{ try c.json(save_url), try c.json(reject_url), try c.json(detail_url), try c.json(save_url), try c.json(unmatched_detail) },
+    ) });
+    const summary = try finish(c, &observer, true);
+    try H.equal(try H.field(summary, "unavailable_bodies"), 0);
+    try H.equal(try H.field(summary, "truncated"), 0);
+    try H.equal(try H.field(summary, "dropped"), 0);
+    const bytes = try c.read(path);
+    var it = std.mem.splitScalar(u8, bytes, '\n');
+    var save_id: ?[]const u8 = null;
+    var reject_id: ?[]const u8 = null;
+    var detail_ids: std.ArrayList([]const u8) = .empty;
+    var seen_bodies: [3]bool = @splat(false);
+    var body_count: usize = 0;
+    while (it.next()) |line| {
+        if (line.len == 0) continue;
+        const record = try c.parse(line);
+        const kind = try H.str(record, "kind");
+        const data = try H.field(record, "data");
+        if (H.eql(u8, kind, "request")) {
+            const req_id = try H.str(data, "request_id");
+            const method = try H.str(data, "method");
+            const url = try H.str(data, "url");
+            if (H.eql(u8, method, "POST") and H.eql(u8, url, try c.a.print("{s}/api/save", .{origin}))) save_id = req_id;
+            if (H.eql(u8, method, "POST") and H.eql(u8, url, reject_url)) reject_id = req_id;
+            if (H.eql(u8, method, "GET") and H.eql(u8, url, try c.a.print("{s}/api/detail", .{origin}))) try detail_ids.append(c.a, req_id);
+        } else if (H.eql(u8, kind, "body")) {
+            body_count += 1;
+            const req_id = try H.str(data, "request_id");
+            try H.equal(try H.field(data, "availability"), "complete");
+            const parsed = try c.parse(try H.str(data, "text"));
+            if (save_id != null and H.eql(u8, req_id, save_id.?)) {
+                try H.equal(parsed, .{ .saved = true, .id = 42 });
+                seen_bodies[0] = true;
+            } else if (reject_id != null and H.eql(u8, req_id, reject_id.?)) {
+                try H.equal(parsed, .{ .saved = false });
+                seen_bodies[1] = true;
+            } else {
+                var matched_detail = false;
+                for (detail_ids.items) |did| if (H.eql(u8, req_id, did)) {
+                    matched_detail = true;
+                };
+                try H.check(matched_detail, "third body matches exact GET detail request");
+                try H.equal(parsed, .{ .detail = "ok" });
+                seen_bodies[2] = true;
+            }
+        }
+    }
+    try H.check(detail_ids.items.len == 2, "both matched and unmatched detail requests observed");
+    try H.check(body_count == 3 and seen_bodies[0] and seen_bodies[1] and seen_bodies[2], "all three exact method/URL pairs captured and unmatched skipped");
 }
 pub fn run(c: H.Context) !void {
     var fixture: Fixture = .{};
@@ -118,6 +197,42 @@ pub fn run(c: H.Context) !void {
     _ = try finish(c, &small, false);
     const small_bytes = try c.read(try c.path("small-body.jsonl"));
     try H.check(std.mem.indexOf(u8, small_bytes, "oversized") != null, "oversized body is explicit");
+    const partial_path = try c.path("partial-multi.jsonl");
+    var partial = try start(page, "partial-multi", &.{ "--out", partial_path, "--duration", "2000", "--body-method", "POST", "--body-url", try c.a.print("{s}/api/save", .{origin}), "--body-method", "GET", "--body-url", "http://127.0.0.1:1/dead" });
+    defer partial.deinit();
+    try ready(c, &partial);
+    _ = try page.result(&.{ "eval", "Promise.all([fetch('/api/save',{method:'POST'}).then(r=>r.text()),fetch('http://127.0.0.1:1/dead').catch(()=>null)]).then(()=>true)" });
+    const partial_summary = try finish(c, &partial, false);
+    try H.equal(try H.field(partial_summary, "unavailable_bodies"), 1);
+    const partial_bytes = try c.read(partial_path);
+    try H.check(std.mem.indexOf(u8, partial_bytes, "\"availability\":\"complete\"") != null and std.mem.indexOf(u8, partial_bytes, "\"reason\":\"LoadingFailed\"") != null, "multi-pair partial failure records complete and unavailable bodies");
+    const invalid_out = try c.path("never-created.jsonl");
+    for ([_]struct { args: []const []const u8, code: []const u8 }{
+        .{ .args = &.{ "observe", "--out", invalid_out, "--body-method", "POST" }, .code = "BodyFilterRequired" },
+        .{ .args = &.{ "observe", "--out", invalid_out, "--body-url", "https://example.test/a" }, .code = "BodyFilterRequired" },
+        .{ .args = &.{ "observe", "--out", invalid_out, "--body-method", "POST", "--body-method", "GET", "--body-url", "https://example.test/a", "--body-url", "https://example.test/b" }, .code = "BodyFilterRequired" },
+        .{ .args = &.{ "observe", "--out", invalid_out, "--body-method", "POST", "--body-url", "https://example.test/a", "--body-method", "GET" }, .code = "BodyFilterRequired" },
+        .{ .args = &.{ "observe", "--out", invalid_out, "--body-method", "POST", "--body-url", "https://example.test/a", "--body-method", "get", "--body-url", "https://example.test/b" }, .code = "InvalidBodyFilter" },
+        .{ .args = &.{ "observe", "--out", invalid_out, "--body-method", "POST", "--body-url", "https://example.test/a", "--body-method", "GET", "--body-url", "https://example.test/b#frag" }, .code = "InvalidBodyFilter" },
+        .{ .args = &.{
+            "observe",                "--out",                  invalid_out,
+            "--body-method",          "GET",                    "--body-url",
+            "https://example.test/1", "--body-method",          "GET",
+            "--body-url",             "https://example.test/2", "--body-method",
+            "GET",                    "--body-url",             "https://example.test/3",
+            "--body-method",          "GET",                    "--body-url",
+            "https://example.test/4", "--body-method",          "GET",
+            "--body-url",             "https://example.test/5", "--body-method",
+            "GET",                    "--body-url",             "https://example.test/6",
+            "--body-method",          "GET",                    "--body-url",
+            "https://example.test/7", "--body-method",          "GET",
+            "--body-url",             "https://example.test/8", "--body-method",
+            "GET",                    "--body-url",             "https://example.test/9",
+        }, .code = "InvalidLimit" },
+    }) |bad| {
+        _ = try page.failure(bad.args, bad.code);
+        try H.check(!try c.exists(invalid_out), "pre-capture validation never creates output file");
+    }
     var unicode = try start(page, "unicode-truncation", &.{ "--out", try c.path("unicode.jsonl"), "--duration", "3000", "--events", "exceptions" });
     defer unicode.deinit();
     try ready(c, &unicode);

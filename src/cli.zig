@@ -45,7 +45,7 @@ const help =
     \\pause MS                        Delay 0..10000 ms within the command budget
     \\observe --tab ID --out NEW_PATH  Independent finite capture; wait for readiness
     \\  --events console,exceptions,network --duration MS (default 30000; max 120000)
-    \\  --body-method METHOD --body-url EXACT_URL (optional matched response text)
+    \\  --body-method METHOD --body-url EXACT_URL (repeatable, up to 8 pairs)
     \\  --max-events N (4096), --max-bytes N (8388608), --body-limit N (1048576)
     \\  Limits above are ceilings; stdout emits readiness and a final summary.
     \\close                            Stop the owned browser and server
@@ -132,21 +132,36 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
     if (std.mem.eql(u8, command, "observe")) {
         var options: observe.Options = .{};
         var workers: std.ArrayList([]const u8) = .empty;
+        var body_methods: std.ArrayList([]const u8) = .empty;
+        var body_urls: std.ArrayList([]const u8) = .empty;
         var seen: std.StringHashMap(void) = .init(a);
         while (iterator.next()) |option| {
-            if (!std.mem.eql(u8, option, "--worker") and seen.contains(option)) return error.InvalidOption;
+            const repeatable = std.mem.eql(u8, option, "--worker") or std.mem.eql(u8, option, "--body-url") or std.mem.eql(u8, option, "--body-method");
+            if (!repeatable and seen.contains(option)) return error.InvalidOption;
             try seen.put(option, {});
             const value = iterator.next() orelse return error.MissingOptionValue;
             if (std.mem.eql(u8, option, "--worker")) {
                 if (workers.items.len == 64) return error.InvalidLimit;
                 try workers.append(a, value);
+            } else if (std.mem.eql(u8, option, "--body-url")) {
+                if (body_urls.items.len > body_methods.items.len) return error.BodyFilterRequired;
+                if (body_urls.items.len == observe.max_body_filters) return error.InvalidLimit;
+                try body_urls.append(a, value);
+            } else if (std.mem.eql(u8, option, "--body-method")) {
+                if (body_methods.items.len > body_urls.items.len) return error.BodyFilterRequired;
+                if (body_methods.items.len == observe.max_body_filters) return error.InvalidLimit;
+                try body_methods.append(a, value);
             } else if (std.mem.eql(u8, option, "--targets")) {
                 if (!std.mem.eql(u8, value, "related") and !std.mem.eql(u8, value, "page")) return error.InvalidOption;
                 options.related = std.mem.eql(u8, value, "related");
             } else if (std.mem.eql(u8, option, "--max-targets")) {
                 options.max_targets = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit;
-            } else if (std.mem.eql(u8, option, "--tab")) options.tab = value else if (std.mem.eql(u8, option, "--out")) options.out = try absolute(a, init.io, value) else if (std.mem.eql(u8, option, "--events")) options.events = value else if (std.mem.eql(u8, option, "--duration")) options.duration = std.fmt.parseInt(u32, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--max-events")) options.max_events = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--max-bytes")) options.max_bytes = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--body-limit")) options.body_limit = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--body-url")) options.body_url = value else if (std.mem.eql(u8, option, "--body-method")) options.body_method = value else return error.UnknownOption;
+            } else if (std.mem.eql(u8, option, "--tab")) options.tab = value else if (std.mem.eql(u8, option, "--out")) options.out = try absolute(a, init.io, value) else if (std.mem.eql(u8, option, "--events")) options.events = value else if (std.mem.eql(u8, option, "--duration")) options.duration = std.fmt.parseInt(u32, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--max-events")) options.max_events = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--max-bytes")) options.max_bytes = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else if (std.mem.eql(u8, option, "--body-limit")) options.body_limit = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLimit else return error.UnknownOption;
         }
+        if (body_methods.items.len != body_urls.items.len) return error.BodyFilterRequired;
+        const filters = try a.alloc(observe.BodyFilter, body_methods.items.len);
+        for (body_methods.items, body_urls.items, 0..) |method, url, i| filters[i] = .{ .method = method, .url = url };
+        options.body_filters = filters;
         options.workers = workers.items;
         return observe.run(a, init.gpa, init.io, path, borrowed, options);
     }
@@ -350,8 +365,8 @@ fn writeHelp(a: std.mem.Allocator, io: std.Io, topic: []const u8) !void {
             \\Options:
             \\  --events console,exceptions,network   Event categories (default all three)
             \\  --duration MS                         Capture window 1..120000 ms (default 30000)
-            \\  --body-method METHOD                  Uppercase HTTP method for response body capture
-            \\  --body-url EXACT_URL                  Exact http(s) URL for response body capture
+            \\  --body-method METHOD                  Uppercase HTTP method for body capture (up to 8 pairs)
+            \\  --body-url EXACT_URL                  Exact http(s) URL for body capture (up to 8 pairs)
             \\  --max-events N                        Output record ceiling 1..4096 (default 4096)
             \\  --max-bytes N                         Output byte ceiling 256..8388608 (default 8388608)
             \\  --body-limit N                        Decoded body ceiling 1..1048576 (default 1048576)

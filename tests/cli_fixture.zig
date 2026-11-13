@@ -62,6 +62,7 @@ pub const Fixture = struct {
         if (H.eql(u8, target, "/frame-controls")) return input.response.send(.{ .body = @embedFile("fixtures/frame-controls.html"), .headers = &.{.{ .name = "Content-Type", .value = "text/html" }} });
         if (H.eql(u8, target, "/workflow")) return input.response.send(.{ .body = @embedFile("fixtures/workflow.html"), .headers = &.{.{ .name = "Content-Type", .value = "text/html" }} });
         if (std.mem.startsWith(u8, target, "/api/save")) return input.response.send(.{ .body = "{\"saved\":true,\"id\":42}", .headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });
+        if (std.mem.startsWith(u8, target, "/api/detail")) return input.response.send(.{ .body = "{\"detail\":\"ok\"}", .headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });
         if (H.eql(u8, target, "/api/reject")) return input.response.send(.{ .body = "{\"saved\":false}", .status = .bad_request, .headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });
         if (H.eql(u8, target, "/redirect")) return input.response.send(.{ .body = "", .status = .found, .headers = &.{.{ .name = "Location", .value = "/api/save?secret=redirect" }} });
         if (H.eql(u8, target, "/background")) self.background.store(true, .release);
