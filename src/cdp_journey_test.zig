@@ -164,3 +164,51 @@ test "owned CDP actual input upload download isolation and origin denial" {
     const cookies = try browser.command("Storage.getCookies", .{ .browserContextId = peer.context });
     try std.testing.expectEqual(@as(usize, 0), J.field(cookies, "cookies").array.items.len);
 }
+
+test "bounded exception diagnostic summary strips controls and preserves UTF-8" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var diag: cdp.agent.Diagnostics = .{};
+    try std.testing.expect(diag.exceptionInfo() == null);
+
+    diag.recordException(a, try J.val(a, .{
+        .text = "Uncaught",
+        .lineNumber = 2,
+        .columnNumber = 14,
+        .exception = .{ .description = "SyntaxError: bad\x00\x1b\r\x7ftoken\n\tat eval:3:15" },
+    }));
+    const first = diag.exceptionInfo().?;
+    try std.testing.expectEqualStrings("SyntaxError: badtoken\n\tat eval:3:15", first.summary);
+    try std.testing.expectEqual(@as(?i64, 2), first.line);
+    try std.testing.expectEqual(@as(?i64, 14), first.column);
+    try std.testing.expect(!first.truncated);
+
+    const exact_prefix: [cdp.agent.Diagnostics.max_exception_summary]u8 = @splat('a');
+    const exact = exact_prefix ++ "\r";
+    diag.recordException(a, try J.val(a, .{ .text = "Uncaught", .lineNumber = 0, .columnNumber = 0, .exception = .{ .description = &exact } }));
+    try std.testing.expectEqual(@as(usize, cdp.agent.Diagnostics.max_exception_summary), diag.exceptionInfo().?.summary.len);
+    try std.testing.expect(!diag.exceptionInfo().?.truncated);
+
+    var unicode: std.ArrayList(u8) = .empty;
+    try unicode.appendSlice(a, "ab");
+    for (0..130) |_| try unicode.appendSlice(a, "🧭");
+    diag.recordException(a, try J.val(a, .{ .text = "Uncaught", .lineNumber = 0, .columnNumber = 6, .exception = .{ .description = unicode.items } }));
+    const clipped = diag.exceptionInfo().?;
+    try std.testing.expect(clipped.truncated);
+    try std.testing.expectEqual(@as(usize, 510), clipped.summary.len);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(clipped.summary));
+
+    diag.recordException(a, try J.val(a, .{
+        .text = "Uncaught (in promise)",
+        .lineNumber = 0,
+        .columnNumber = 0,
+        .stackTrace = .{ .callFrames = .{.{ .lineNumber = 4, .columnNumber = 9 }} },
+        .exception = .{ .type = "string", .value = "rejected plain string" },
+    }));
+    const rejected = diag.exceptionInfo().?;
+    try std.testing.expectEqualStrings("Uncaught (in promise): rejected plain string", rejected.summary);
+    try std.testing.expectEqual(@as(?i64, 4), rejected.line);
+    try std.testing.expectEqual(@as(?i64, 9), rejected.column);
+    try std.testing.expect(!rejected.truncated);
+}

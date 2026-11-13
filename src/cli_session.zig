@@ -308,7 +308,8 @@ fn awaitDisconnect(io: std.Io, stream: Stream) !void {
 }
 
 pub fn failure(a: A, input: Request, err: anyerror, diagnostics: Agent.Diagnostics) ![]const u8 {
-    return J.json(a, .{ .ok = false, .err = @errorName(err), .command = input.command, .tab = input.tab, .frame = input.frame, .@"error" = .{ .code = @errorName(err), .phase = diagnostics.phase, .match_count = diagnostics.match_count, .action = diagnostics.action, .step = diagnostics.step, .steps = diagnostics.steps, .input_release = diagnostics.input_release } });
+    const exception = if (err == error.BrowserEvaluationFailed) diagnostics.exceptionInfo() else null;
+    return J.json(a, .{ .ok = false, .err = @errorName(err), .command = input.command, .tab = input.tab, .frame = input.frame, .@"error" = .{ .code = @errorName(err), .phase = diagnostics.phase, .match_count = diagnostics.match_count, .action = diagnostics.action, .step = diagnostics.step, .steps = diagnostics.steps, .input_release = diagnostics.input_release, .exception = exception } });
 }
 
 pub fn executePage(page: *Agent.Page, input: Request) anyerror!V {
@@ -373,6 +374,7 @@ fn executeSequence(page: *Agent.Page, raw: []const u8, unload: ?*bool) anyerror!
         page.diagnostics.step = i;
         page.diagnostics.action = .not_started;
         page.diagnostics.match_count = null;
+        page.diagnostics.clearException();
         const previous_unload = if (unload) |flag| flag.* else false;
         if (unload) |flag| if (std.mem.eql(u8, step.command, "open") or std.mem.eql(u8, step.command, "reload")) {
             flag.* = true;
@@ -383,6 +385,16 @@ fn executeSequence(page: *Agent.Page, raw: []const u8, unload: ?*bool) anyerror!
         const result = executePage(page, step) catch |err| {
             reports[i].action = page.diagnostics.action;
             reports[i].err = @errorName(err);
+            if (err == error.BrowserEvaluationFailed) {
+                if (page.diagnostics.exceptionInfo()) |exc| {
+                    reports[i].exception = .{
+                        .summary = try page.a.dupe(u8, exc.summary),
+                        .line = exc.line,
+                        .column = exc.column,
+                        .truncated = exc.truncated,
+                    };
+                }
+            }
             return err;
         };
         reports[i].action = page.diagnostics.action;

@@ -25,14 +25,121 @@ pub const Query = struct {
 };
 
 pub const Diagnostics = struct {
+    pub const max_exception_summary = 512;
     pub const Action = enum { not_started, possibly_dispatched, completed };
+    pub const Exception = struct {
+        summary: []const u8,
+        line: ?i64 = null,
+        column: ?i64 = null,
+        truncated: bool = false,
+    };
     phase: enum { validate, connect, resolve, inspect, action, output } = .validate,
     match_count: ?usize = null,
     action: Action = .not_started,
     step: ?usize = null,
     steps: []Step = &.{},
     input_release: enum { not_needed, complete, incomplete } = .not_needed,
-    pub const Step = struct { index: usize, command: []const u8, action: Action = .not_started, err: ?[]const u8 = null };
+    has_exception: bool = false,
+    exception_buf: [max_exception_summary]u8 = undefined,
+    exception_len: u16 = 0,
+    exception_line: ?i64 = null,
+    exception_column: ?i64 = null,
+    exception_truncated: bool = false,
+    pub const Step = struct {
+        index: usize,
+        command: []const u8,
+        action: Action = .not_started,
+        err: ?[]const u8 = null,
+        exception: ?Exception = null,
+    };
+
+    pub fn clearException(self: *Diagnostics) void {
+        self.has_exception = false;
+        self.exception_len = 0;
+        self.exception_line = null;
+        self.exception_column = null;
+        self.exception_truncated = false;
+    }
+
+    pub fn exceptionInfo(self: *const Diagnostics) ?Exception {
+        if (!self.has_exception) return null;
+        return .{
+            .summary = self.exception_buf[0..self.exception_len],
+            .line = self.exception_line,
+            .column = self.exception_column,
+            .truncated = self.exception_truncated,
+        };
+    }
+
+    pub fn recordException(self: *Diagnostics, a: A, details: Value) void {
+        self.clearException();
+        if (details != .object) return;
+        var line: ?i64 = if (J.field(details, "lineNumber") == .integer) J.field(details, "lineNumber").integer else null;
+        var column: ?i64 = if (J.field(details, "columnNumber") == .integer) J.field(details, "columnNumber").integer else null;
+        const text = J.str(J.field(details, "text"));
+        if (line != null and column != null and line.? == 0 and column.? == 0 and std.mem.indexOf(u8, text, "in promise") != null) {
+            const frames = J.field(J.field(details, "stackTrace"), "callFrames");
+            if (frames == .array and frames.array.items.len > 0) {
+                const first = frames.array.items[0];
+                if (J.field(first, "lineNumber") == .integer) line = J.field(first, "lineNumber").integer;
+                if (J.field(first, "columnNumber") == .integer) column = J.field(first, "columnNumber").integer;
+            }
+        }
+        const exc = J.field(details, "exception");
+        const desc = J.str(J.field(exc, "description"));
+        const val = J.field(exc, "value");
+        const subtype = J.str(J.field(exc, "subtype"));
+        const exc_type = J.str(J.field(exc, "type"));
+        const raw: []const u8 = if (desc.len > 0)
+            desc
+        else if (val == .string and val.string.len > 0)
+            (if (text.len > 0) (a.print("{s}: {s}", .{ text, val.string }) catch val.string) else val.string)
+        else if (val != .null) blk: {
+            const rendered = J.json(a, val) catch break :blk text;
+            break :blk if (text.len > 0) (a.print("{s}: {s}", .{ text, rendered }) catch rendered) else rendered;
+        } else if (std.mem.eql(u8, subtype, "null") or std.mem.eql(u8, exc_type, "undefined")) blk: {
+            const label = if (std.mem.eql(u8, subtype, "null")) "null" else "undefined";
+            break :blk if (text.len > 0) (a.print("{s}: {s}", .{ text, label }) catch text) else label;
+        } else text;
+
+        var out_len: usize = 0;
+        var clipped = false;
+        var i: usize = 0;
+        while (i < raw.len) {
+            const b = raw[i];
+            if (b < 0x80) {
+                i += 1;
+                if ((b < 0x20 and b != '\n' and b != '\t') or b == 0x7f) continue;
+                if (out_len == self.exception_buf.len) {
+                    clipped = true;
+                    break;
+                }
+                self.exception_buf[out_len] = b;
+                out_len += 1;
+            } else {
+                const seq_len = std.unicode.utf8ByteSequenceLength(b) catch {
+                    i += 1;
+                    continue;
+                };
+                if (i + seq_len > raw.len or !std.unicode.utf8ValidateSlice(raw[i .. i + seq_len])) {
+                    i += 1;
+                    continue;
+                }
+                if (out_len + seq_len > self.exception_buf.len) {
+                    clipped = true;
+                    break;
+                }
+                @memcpy(self.exception_buf[out_len .. out_len + seq_len], raw[i .. i + seq_len]);
+                out_len += seq_len;
+                i += seq_len;
+            }
+        }
+        self.has_exception = true;
+        self.exception_len = @intCast(out_len);
+        self.exception_line = line;
+        self.exception_column = column;
+        self.exception_truncated = clipped;
+    }
 };
 
 /// Owns only CDP connections. Disconnect never closes tabs, contexts, profiles
@@ -224,7 +331,11 @@ pub const Page = struct {
 
     fn remote(self: *Page, method: []const u8, params: anytype) !Value {
         const result = try self.command(method, params);
-        if (J.field(result, "exceptionDetails") != .null) return error.BrowserEvaluationFailed;
+        const details = J.field(result, "exceptionDetails");
+        if (details != .null) {
+            self.diagnostics.recordException(self.a, details);
+            return error.BrowserEvaluationFailed;
+        }
         return J.field(result, "result");
     }
 
@@ -437,7 +548,11 @@ pub const Page = struct {
             const object = J.field(try tree.call(self.a, sid, "DOM.resolveNode", .{ .backendNodeId = J.field(owner, "backendNodeId"), .executionContextId = ctx.id, .objectGroup = self.group }), "object");
             const function = try self.a.print("function(arg){{return ({s}).framePoint.call(this,arg)}}", .{@embedFile("cdp_agent_helpers.js")});
             const result = try tree.call(self.a, sid, "Runtime.callFunctionOn", .{ .objectId = J.field(object, "objectId"), .functionDeclaration = function, .arguments = .{.{ .value = mapped }}, .returnByValue = true });
-            if (J.field(result, "exceptionDetails") != .null) return error.BrowserEvaluationFailed;
+            const details = J.field(result, "exceptionDetails");
+            if (details != .null) {
+                self.diagnostics.recordException(self.a, details);
+                return error.BrowserEvaluationFailed;
+            }
             mapped = J.field(J.field(result, "result"), "value");
             if (J.str(J.field(mapped, "reason")).len > 0) return mapped;
             id = parent;

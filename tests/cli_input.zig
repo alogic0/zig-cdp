@@ -46,8 +46,23 @@ pub fn exercise(page: H.Client) !void {
     const detail = try H.field(failed, "error");
     try H.equal(try H.field(detail, "step"), 2);
     try H.equal(try H.field(detail, "input_release"), "complete");
+    try H.equal(try H.field(detail, "exception"), null);
     try H.equal(try H.field((try H.field(detail, "steps")).array.items[3], "action"), "not_started");
     try page.expect(&.{ "eval", "!held && keys.length===0 && document.querySelector('#name').value==='sequence'" }, true);
+    try c.write(path,
+        \\{"version":1,"steps":[
+        \\{"command":"eval","args":["1 + 1"]},
+        \\{"command":"eval","args":["const a = 1;\nthrow new TypeError('step boom')"]},
+        \\{"command":"fill","args":["#name","must not run"]}]}
+    );
+    const eval_seq = try page.failure(&.{ "sequence", "--file", path }, "BrowserEvaluationFailed");
+    const eval_seq_err = try H.field(eval_seq, "error");
+    try H.equal(try H.field(eval_seq_err, "step"), 1);
+    const top_exc = try H.field(eval_seq_err, "exception");
+    const step_exc = try H.field((try H.field(eval_seq_err, "steps")).array.items[1], "exception");
+    try H.check(std.mem.indexOf(u8, try H.str(top_exc, "summary"), "TypeError: step boom") != null, "sequence error includes exception summary");
+    try H.equal(try H.field(top_exc, "line"), 1);
+    try H.equal(step_exc, top_exc);
     _ = try page.result(&.{ "content", @embedFile("fixtures/drag.html") });
     const timed = try page.run(&.{ "drag", "#card", "#drop", "--hold", "2000", "--timeout", "350" }, .{ .ok = false });
     try H.equal(try H.field(try H.field(timed, "error"), "input_release"), "complete");
