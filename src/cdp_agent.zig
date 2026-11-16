@@ -254,6 +254,7 @@ pub const Page = struct {
     shadows: []const []const u8 = &.{},
     viewport_emulated: bool = false,
     restore_headless_viewport: bool = false,
+    viewport_before: ?Value = null,
 
     pub fn init(a: A, io: std.Io, socket: *cdp.WsSession, timeout_ms: u32, diagnostics: *Diagnostics) !Page {
         var random: [8]u8 = undefined;
@@ -285,6 +286,13 @@ pub const Page = struct {
 
     pub fn emulateViewport(self: *Page, vp: Viewport) !void {
         try vp.validate();
+        if (!self.viewport_emulated and !self.restore_headless_viewport) {
+            const reply = try cdp.target_tree.callSession(self.a, self.socket, null, "Runtime.evaluate", .{
+                .expression = "({width:innerWidth,height:innerHeight})",
+                .returnByValue = true,
+            });
+            self.viewport_before = J.field(J.field(reply, "result"), "value");
+        }
         self.diagnostics.viewport_cleanup = .incomplete;
         self.viewport_emulated = true;
         _ = try cdp.target_tree.callSession(self.a, self.socket, null, "Emulation.setDeviceMetricsOverride", .{
@@ -307,10 +315,21 @@ pub const Page = struct {
         var scratch = std.heap.ArenaAllocator.init(self.socket.alloc);
         defer scratch.deinit();
         const a = scratch.allocator();
-        const need_screencast = !self.restore_headless_viewport and !self.input.frames;
-        if (need_screencast) _ = cdp.target_tree.callSession(a, self.socket, null, "Page.startScreencast", .{ .format = "png", .everyNthFrame = 1 }) catch return;
-        defer if (need_screencast and !self.socket.failed) {
-            _ = cdp.target_tree.callSession(a, self.socket, null, "Page.stopScreencast", .{}) catch {};
+        // Focus emulation keeps a hidden renderer updating without activating
+        // its tab or OS window. A screenshot flush can stall while hidden and
+        // a clip can leave the view at the clip's size after that timeout.
+        const need_focus = !self.restore_headless_viewport and !self.input.frames;
+        if (need_focus) _ = cdp.target_tree.callSession(a, self.socket, null, "Emulation.setFocusEmulationEnabled", .{ .enabled = true }) catch return;
+        defer if (need_focus and !self.socket.failed) {
+            _ = cdp.target_tree.callSession(a, self.socket, null, "Emulation.setFocusEmulationEnabled", .{ .enabled = false }) catch {
+                self.diagnostics.viewport_cleanup = .incomplete;
+            };
+        };
+        if (need_focus) _ = cdp.target_tree.callSession(a, self.socket, null, "Page.startScreencast", .{ .format = "png", .everyNthFrame = 1 }) catch return;
+        defer if (need_focus and !self.socket.failed) {
+            _ = cdp.target_tree.callSession(a, self.socket, null, "Page.stopScreencast", .{}) catch {
+                self.diagnostics.viewport_cleanup = .incomplete;
+            };
         };
         _ = cdp.target_tree.callSession(a, self.socket, null, "Emulation.clearDeviceMetricsOverride", .{}) catch return;
         if (self.restore_headless_viewport) {
@@ -321,10 +340,25 @@ pub const Page = struct {
                 .mobile = false,
             }) catch return;
         } else {
-            // Hidden tabs defer SynchronizeVisualProperties unless capturing a frame.
-            _ = cdp.target_tree.callSession(a, self.socket, null, "Page.captureScreenshot", .{
+            const before = self.viewport_before orelse return;
+            // Native geometry can arrive after the metrics-clear reply. Avoid
+            // requesting a second screenshot when restoration already landed.
+            const end_poll = now(self.io) + 100;
+            var restored = false;
+            while (true) {
+                const reply = cdp.target_tree.callSession(a, self.socket, null, "Runtime.evaluate", .{
+                    .expression = "({width:innerWidth,height:innerHeight})",
+                    .returnByValue = true,
+                }) catch return;
+                const current = J.field(J.field(reply, "result"), "value");
+                restored = J.number(J.field(current, "width")) == J.number(J.field(before, "width")) and
+                    J.number(J.field(current, "height")) == J.number(J.field(before, "height"));
+                if (restored or now(self.io) >= end_poll) break;
+                self.io.sleep(.fromMilliseconds(10), .awake) catch return;
+            }
+            if (!restored) _ = cdp.target_tree.callSession(a, self.socket, null, "Page.captureScreenshot", .{
                 .format = "png",
-                .clip = .{ .x = 0, .y = 0, .width = 1, .height = 1, .scale = 1 },
+                .fromSurface = false,
             }) catch return;
         }
         self.viewport_emulated = false;

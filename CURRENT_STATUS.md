@@ -1,5 +1,34 @@
 # Current delivery
 
+## Background viewport cleanup corrected (0.5.1), November 16, 2026
+
+The [regression plan](docs/plans/2026-11-16-background-viewport-cleanup.md)
+records a real desktop reproduction: viewport capture completed, but cleanup
+timed out and left a background page at 1x1. Cleanup now briefly enables
+page-local focus emulation, clears metrics, and allows up to 100 ms for native
+geometry to arrive. It requests an unclipped view capture only if geometry is
+still stale. The complete cleanup remains bounded by 500 ms. Neither cleanup
+nor input initialization uses a 1x1 surface clip. Temporary focus/screencast
+ownership is released, without activating a tab or resizing the native window.
+
+Zig 0.17.0 and Chrome 157.0.8103.38 qualification:
+
+| Check | Debug | ReleaseSafe |
+| --- | --- | --- |
+| Library/observer tests | 17/17 passed | 17/17 passed |
+| Headed geometry, viewport/full capture, input, focus and subsequent resize | passed | passed |
+| CLI `agent` and `input` groups | passed | passed |
+| Compile and example | passed | passed |
+| Actual background desktop viewport/full capture and sequence restoration | passed | passed |
+
+Real desktop captures restored 1673x816 after 375x812 emulation. An intentional
+JavaScript failure retained its error and completed viewport cleanup in both
+profiles. ReleaseSafe also captured/restored the actual local CRM tab. A
+short-budget input warm-up on the background probe still timed out: it honestly
+reported incomplete transport cleanup, with native dimensions retained rather
+than 1x1. Full CLI/resource/package sweeps were not repeated for this patch.
+Openbox remains unavailable, so the separate `test-focus` lane was not run.
+
 ## Usability and verification improvements completed (0.5.0), November 13, 2026
 
 The [plan](docs/plans/2026-11-13-eval-diagnostics-viewport-observe-help.md) is

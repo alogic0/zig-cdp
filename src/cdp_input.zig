@@ -96,7 +96,7 @@ pub const State = struct {
             self.frames = true;
             _ = try page.command("Page.startScreencast", .{ .format = "png", .everyNthFrame = 1 });
             // Wait for an initial frame before sampling animated geometry.
-            _ = try page.command("Page.captureScreenshot", .{ .format = "png", .clip = .{ .x = 0, .y = 0, .width = 1, .height = 1, .scale = 1 } });
+            _ = try page.command("Page.captureScreenshot", .{ .format = "png", .captureBeyondViewport = false });
         }
     }
     pub fn send(self: *State, page: anytype, method: []const u8, params: V) !V {

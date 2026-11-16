@@ -71,22 +71,44 @@ test "headed tabs share their context window and follow resizing" {
         _ = try page.command("Page.bringToFront", .{});
         try page.wait("document.visibilityState === 'visible' && document.hasFocus()");
         try std.testing.expectEqualStrings("same document", J.str(try attached.eval("window.kept")));
+        _ = try attached.eval("document.body.style.height='2000px'; document.body.innerHTML='<button id=probe onclick=\"this.dataset.clicked=1\">Viewport probe</button>'; true");
         const bounds_before = try J.json(a, try browser.command("Browser.getWindowBounds", .{ .windowId = window_id }));
-        const bg_before = try J.json(a, try attached.eval("({w:innerWidth,h:innerHeight,ow:outerWidth,oh:outerHeight})"));
-        {
+        const bg_before = try J.json(a, try attached.eval("({w:innerWidth,h:innerHeight,ow:outerWidth,oh:outerHeight,dpr:devicePixelRatio})"));
+        const screenshot_path = try a.print("{s}/background.png", .{workspace});
+        const Scenario = enum { geometry, viewport, full_page, input };
+        for ([_]Scenario{ .geometry, .viewport, .full_page, .input }) |scenario| {
+            errdefer std.debug.print("Viewport scenario: {s}\n", .{@tagName(scenario)});
             var diag: @import("cdp").agent.Diagnostics = .{};
             var cmd = try @import("cdp").agent.Page.init(a, io, &attached.socket, 3000, &diag);
             defer cmd.deinit();
             try cmd.emulateViewport(try @import("cdp").agent.Viewport.parse("390x844"));
             try std.testing.expectEqual(@as(i64, 390), J.number(try cmd.eval("innerWidth")));
             try std.testing.expectEqual(@as(i64, 844), J.number(try cmd.eval("innerHeight")));
+            switch (scenario) {
+                .geometry => {},
+                .viewport, .full_page => _ = try cmd.screenshot(screenshot_path, scenario == .full_page),
+                .input => {
+                    try cmd.click(.{ .selector = "#probe" });
+                    try std.testing.expectEqualStrings("1", J.str(try cmd.eval("document.querySelector('#probe').dataset.clicked")));
+                    cmd.input.finish(&cmd);
+                },
+            }
             try std.testing.expect(J.boolean(try page.eval("document.visibilityState === 'visible' && document.hasFocus()")));
             try std.testing.expectEqualStrings(bounds_before, try J.json(a, try browser.command("Browser.getWindowBounds", .{ .windowId = window_id })));
             cmd.clearViewport();
             try std.testing.expectEqual(.complete, diag.viewport_cleanup);
+            if (scenario != .input) try std.testing.expect(!J.boolean(try attached.eval("document.hasFocus()")));
+            try std.testing.expectEqualStrings(bg_before, try J.json(a, try attached.eval("({w:innerWidth,h:innerHeight,ow:outerWidth,oh:outerHeight,dpr:devicePixelRatio})")));
+            try std.testing.expectEqualStrings(bounds_before, try J.json(a, try browser.command("Browser.getWindowBounds", .{ .windowId = window_id })));
+            try std.testing.expect(J.boolean(try page.eval("document.visibilityState === 'visible' && document.hasFocus()")));
         }
-        try std.testing.expectEqualStrings(bg_before, try J.json(a, try attached.eval("({w:innerWidth,h:innerHeight,ow:outerWidth,oh:outerHeight})")));
+        try std.testing.expectEqualStrings(bg_before, try J.json(a, try attached.eval("({w:innerWidth,h:innerHeight,ow:outerWidth,oh:outerHeight,dpr:devicePixelRatio})")));
         try std.testing.expectEqualStrings(bounds_before, try J.json(a, try browser.command("Browser.getWindowBounds", .{ .windowId = window_id })));
+        // Cleanup must remove the override, not pin the restored dimensions.
+        _ = try browser.command("Browser.setWindowBounds", .{ .windowId = window_id, .bounds = .{ .width = 1000, .height = 750 } });
+        _ = try browser.command("Target.activateTarget", .{ .targetId = sibling.target });
+        _ = try attached.command("Page.bringToFront", .{});
+        try attached.wait("innerWidth>950 && innerWidth<=outerWidth && outerWidth<=1002 && innerHeight>650 && innerHeight<750");
         try browser.closeTab(sibling.target);
         attached.detach();
         try std.testing.expect(J.boolean(try page.eval("true")));

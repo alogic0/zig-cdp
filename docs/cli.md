@@ -501,9 +501,10 @@ Results contain per-step results, zero-based step reports, `input_release`, and
 or `incomplete`. Later steps remain
 `not_started`. Cleanup attempts mouse/key release on the same target for up to
 200 ms and clears any temporary `--emulate-viewport` override with
-`Emulation.clearDeviceMetricsOverride` within a 500 ms cleanup allowance (using
-a brief compositor frame capture on hidden tabs so Blink synchronizes restored
-visual properties without window activation); a lost connection reports
+`Emulation.clearDeviceMetricsOverride` within a 500 ms cleanup allowance. Hidden
+tabs briefly use page-local focus emulation and a screencast; native geometry
+gets up to 100 ms to settle before an unclipped view capture is requested if
+needed. No tab/window activation or native window resizing is used. A lost connection reports
 incomplete cleanup without replacing the
 original error. Up to one mouse button and 16 keys may be held. Outstanding
 input and temporary viewport overrides are also cleared at successful sequence
