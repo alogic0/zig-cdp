@@ -97,7 +97,7 @@ fn run(init: std.process.Init, input: *session.Request, diagnostics: *Agent.Diag
     _ = iterator.next();
     const first = iterator.next() orelse unreachable;
     if (std.mem.eql(u8, first, "--version")) {
-        try std.Io.File.stdout().writeStreamingAll(init.io, "zig-cdp 0.5.1\n");
+        try std.Io.File.stdout().writeStreamingAll(init.io, "zig-cdp 0.5.2\n");
         return 0;
     }
     const borrowed = std.mem.eql(u8, first, "--endpoint");

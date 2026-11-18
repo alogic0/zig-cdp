@@ -4,7 +4,9 @@ Provide a native Zig CDP library and a reusable command-line browser controller.
 Linux and the compiler pinned in `.zigversion` are the initial supported target.
 The package has no GUI framework or application dependency. `zig-process` supplies
 exact-child and owned-process-group lifecycle management through a pinned GitHub
-dependency with a content hash. The package exports the `cdp` module and installs
+dependency with a content hash. `zig-ws` owns the WebSocket handshake and frame
+I/O. CDP owns loopback endpoint validation, request IDs, flattened session
+routing, and queued events. The package exports the `cdp` module and installs
 `zig-cdp`.
 
 ## Library ownership

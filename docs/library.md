@@ -32,9 +32,8 @@ const browser = b.dependency("zig_cdp", .{
 exe.root_module.addImport("cdp", browser.module("cdp"));
 ```
 
-The package fetches its pinned `zig-process` dependency automatically. Both
-packages use the compiler pinned in `.zigversion`; the module honors the
-requested optimization.
+The package fetches its pinned `zig-process` and `zig-ws` dependencies.
+They use the compiler pinned in `.zigversion` and honor the requested optimization.
 
 ## Launch and cleanup
 

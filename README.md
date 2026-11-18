@@ -6,10 +6,11 @@ Chromium are required. The compiler version is pinned in `.zigversion`.
 
 The reusable `cdp` module has no GUI framework dependency. Browser process
 ownership comes from [`zig-process`](https://github.com/alogic0/zig-process),
-downloaded automatically at a pinned revision and verified by its package hash.
+and the WebSocket transport comes from [zig-ws](https://github.com/alogic0/zig-ws).
+The manifest pins a Git revision and package hash for each.
 Node.js and a browser-driver service are not required.
 
-Version **0.5.1**, licensed under the [MIT License](LICENSE).
+Version **0.5.2**, licensed under the [MIT License](LICENSE).
 
 ## Install
 

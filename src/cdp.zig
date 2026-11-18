@@ -2,6 +2,7 @@
 //! Provides loopback target management, RFC 6455 WebSocket framing,
 //! JSON-RPC evaluation, and headless process lifecycle.
 const std = @import("std");
+const ws = @import("ws");
 pub const journey = @import("cdp_journey.zig");
 pub const agent = @import("cdp_agent.zig");
 pub const target_tree = @import("cdp_targets.zig");
@@ -26,6 +27,7 @@ pub const WsSession = struct {
     stream: std.Io.net.Stream,
     io: std.Io,
     alloc: std.mem.Allocator,
+    transport: ?ws.Connection = null,
     next_id: u32 = 1,
     failed: bool = false,
     pending: std.ArrayList([]const u8) = .empty,
@@ -55,139 +57,44 @@ pub const WsSession = struct {
         self.pending.deinit(self.alloc);
         self.pending = pending;
         self.alloc = alloc;
+        if (self.transport) |*connection| connection.allocator = alloc;
     }
 
     pub fn close(self: *WsSession) void {
         for (self.pending.items) |message| self.alloc.free(message);
         self.pending.deinit(self.alloc);
-        self.stream.close(self.io);
+        self.pending = .empty;
+        self.pending_bytes = 0;
+        self.wire().deinit();
+    }
+
+    fn wire(self: *WsSession) *ws.Connection {
+        // Directly constructed sessions already own an upgraded stream.
+        if (self.transport == null) self.transport = .{
+            .stream = self.stream,
+            .io = self.io,
+            .allocator = self.alloc,
+            .max_message_bytes = max_message_bytes,
+        };
+        return &self.transport.?;
+    }
+
+    fn timeout(self: *const WsSession) std.Io.Timeout {
+        const end = self.deadline_ms orelse return ws.default_timeout;
+        return .{ .deadline = .{ .clock = .awake, .raw = .{ .nanoseconds = @as(i96, end) * std.time.ns_per_ms } } };
     }
 
     pub fn sendRaw(self: *WsSession, payload: []const u8) !void {
-        var wb: [4096]u8 = undefined;
-        var w = self.stream.writer(self.io, &wb);
-
-        // Byte 0: 0x81 (FIN + text frame)
-        w.interface.writeByte(0x81) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-
-        // Byte 1..: mask bit set (0x80)
-        if (payload.len < 126) {
-            w.interface.writeByte(0x80 | @as(u8, @intCast(payload.len))) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-        } else if (payload.len <= 0xFFFF) {
-            w.interface.writeByte(0x80 | 126) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-            var len_bytes: [2]u8 = undefined;
-            std.mem.writeInt(u16, &len_bytes, @as(u16, @intCast(payload.len)), .big);
-            w.interface.writeAll(&len_bytes) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-        } else {
-            w.interface.writeByte(0x80 | 127) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-            var len_bytes: [8]u8 = undefined;
-            std.mem.writeInt(u64, &len_bytes, payload.len, .big);
-            w.interface.writeAll(&len_bytes) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-        }
-
-        var mask: [4]u8 = undefined;
-        self.io.random(&mask);
-        w.interface.writeAll(&mask) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-        var chunk: [4096]u8 = undefined;
-        var offset: usize = 0;
-        while (offset < payload.len) {
-            const n = @min(chunk.len, payload.len - offset);
-            for (chunk[0..n], 0..) |*byte, i| byte.* = payload[offset + i] ^ mask[(offset + i) % 4];
-            w.interface.writeAll(chunk[0..n]) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-            offset += n;
-        }
-        w.interface.flush() catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-    }
-
-    fn readExact(self: *WsSession, bytes: []u8) !void {
-        var offset: usize = 0;
-        while (offset < bytes.len) {
-            const idle_end = @as(i64, @intCast(std.Io.Clock.awake.now(self.io).toMilliseconds())) + 30_000;
-            const end = @min(self.deadline_ms orelse idle_end, idle_end);
-            var buffers = [_][]u8{bytes[offset..]};
-            const result = poll: while (true) {
-                if (std.Io.Clock.awake.now(self.io).toMilliseconds() >= end) return error.Timeout;
-                break :poll self.io.operateTimeout(.{ .net_read = .{
-                    .socket_handle = self.stream.socket.handle,
-                    .data = &buffers,
-                } }, .{ .deadline = .{ .raw = .{ .nanoseconds = @as(i96, end) * std.time.ns_per_ms }, .clock = .awake } }) catch |err| {
-                    // The I/O runtime permits early poll timeouts. Retry only
-                    // the read, retaining the original absolute deadline.
-                    if (err == error.Timeout) continue :poll;
-                    return err;
-                };
-            };
-            const n = (try result.net_read).data_len;
-            if (n == 0) return error.ConnectionClosed;
-            offset += n;
-        }
+        try self.wire().send(.text, payload, self.timeout());
     }
 
     pub fn receiveRaw(self: *WsSession) ![]const u8 {
-        var message: std.ArrayList(u8) = .empty;
-        errdefer message.deinit(self.alloc);
-        var fragmented = false;
-        while (true) {
-            var head: [2]u8 = undefined;
-            try self.readExact(&head);
-            const b0 = head[0];
-            const opcode = b0 & 0x0F;
-            if (b0 & 0x70 != 0) return error.InvalidWebSocketFrame;
-            const final = b0 & 0x80 != 0;
-            const b1 = head[1];
-            const masked = (b1 & 0x80) != 0;
-            const len_byte = b1 & 0x7F;
-
-            var payload_len: usize = len_byte;
-            if (len_byte == 126) {
-                var len_bytes: [2]u8 = undefined;
-                try self.readExact(&len_bytes);
-                payload_len = std.mem.readInt(u16, &len_bytes, .big);
-            } else if (len_byte == 127) {
-                var len_bytes: [8]u8 = undefined;
-                try self.readExact(&len_bytes);
-                payload_len = std.math.cast(usize, std.mem.readInt(u64, &len_bytes, .big)) orelse return error.MessageTooLarge;
-            }
-            if (payload_len > max_message_bytes - message.items.len) return error.MessageTooLarge;
-            if (opcode >= 8 and (!final or payload_len > 125)) return error.InvalidWebSocketFrame;
-
-            var mask_key: [4]u8 = undefined;
-            if (masked) {
-                try self.readExact(&mask_key);
-            }
-
-            const buf = try self.alloc.alloc(u8, payload_len);
-            defer self.alloc.free(buf);
-            try self.readExact(buf);
-
-            if (masked) {
-                for (buf, 0..) |*b, i| {
-                    b.* ^= mask_key[i % 4];
-                }
-            }
-
-            switch (opcode) {
-                0, 1 => {
-                    if ((opcode == 0) != fragmented) return error.InvalidWebSocketFrame;
-                    try message.appendSlice(self.alloc, buf);
-                    if (final) return message.toOwnedSlice(self.alloc);
-                    fragmented = true;
-                },
-                8 => return error.ConnectionClosed,
-                9 => {
-                    var wb: [256]u8 = undefined;
-                    var writer = self.stream.writer(self.io, &wb);
-                    var mask: [4]u8 = undefined;
-                    self.io.random(&mask);
-                    writer.interface.writeAll(&.{ 0x8a, 0x80 | @as(u8, @intCast(buf.len)) }) catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
-                    writer.interface.writeAll(&mask) catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
-                    for (buf, 0..) |byte, i| writer.interface.writeByte(byte ^ mask[i % 4]) catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
-                    writer.interface.flush() catch |err| return if ((writer.err orelse err) == error.Canceled) error.Canceled else err;
-                },
-                10 => {},
-                else => return error.InvalidWebSocketFrame,
-            }
-        }
+        const connection = self.wire();
+        const message = try connection.receive(self.timeout());
+        if (message == .text) return message.text;
+        message.deinit(self.alloc);
+        connection.deinit();
+        return if (message == .close) error.ConnectionClosed else error.InvalidWebSocketFrame;
     }
 
     pub fn takeEvent(self: *WsSession) ?[]const u8 {
@@ -717,70 +624,24 @@ pub const CdpClient = struct {
     }
 
     pub fn connectWs(self: CdpClient, ws_url_or_path: []const u8) !WsSession {
+        var scratch = std.heap.ArenaAllocator.init(self.alloc);
+        defer scratch.deinit();
+        const temp = scratch.allocator();
         var path = ws_url_or_path;
         if (std.mem.startsWith(u8, path, "ws://")) {
             const uri = std.Uri.parse(path) catch return error.InvalidEndpoint;
-            const host = try (uri.host orelse return error.InvalidEndpoint).toRawMaybeAlloc(self.alloc);
+            const host = try (uri.host orelse return error.InvalidEndpoint).toRawMaybeAlloc(temp);
             if ((!std.mem.eql(u8, host, "127.0.0.1") and !std.mem.eql(u8, host, "localhost")) or
                 (uri.port orelse 80) != self.port or uri.user != null or uri.password != null or uri.query != null or uri.fragment != null) return error.InvalidEndpoint;
-            path = try uri.path.toRawMaybeAlloc(self.alloc);
+            const decoded = try uri.path.toRawMaybeAlloc(temp);
+            if (std.mem.indexOfAny(u8, decoded, " \r\n") != null) return error.InvalidEndpoint;
+            path = uri.path.percent_encoded;
         }
         if (!std.mem.startsWith(u8, path, "/") or std.mem.indexOfAny(u8, path, " \r\n") != null) return error.InvalidEndpoint;
 
-        const stream = try (try std.Io.net.IpAddress.parse("127.0.0.1", self.port)).connect(self.io, .{ .mode = .stream });
-        errdefer stream.close(self.io);
-        // Masked frames can span writer buffers. Do not leave their final
-        // fragment waiting for a delayed TCP acknowledgement between RPCs.
-        const no_delay: i32 = 1;
-        try std.posix.setsockopt(stream.socket.handle, std.os.linux.IPPROTO.TCP, std.os.linux.TCP.NODELAY, std.mem.asBytes(&no_delay));
-
-        var rb: [1]u8 = undefined;
-        var wb: [2048]u8 = undefined;
-        var r = stream.reader(self.io, &rb);
-        var w = stream.writer(self.io, &wb);
-
-        const handshake = try std.fmt.allocPrint(
-            self.alloc,
-            "GET {s} HTTP/1.1\r\n" ++
-                "Host: 127.0.0.1:{d}\r\n" ++
-                "Upgrade: websocket\r\n" ++
-                "Connection: Upgrade\r\n" ++
-                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
-                "Sec-WebSocket-Version: 13\r\n\r\n",
-            .{ path, self.port },
-        );
-        defer self.alloc.free(handshake);
-
-        w.interface.writeAll(handshake) catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-        w.interface.flush() catch |err| return if ((w.err orelse err) == error.Canceled) error.Canceled else err;
-
-        var header_buf: [4096]u8 = undefined;
-        var header_len: usize = 0;
-        while (header_len < header_buf.len) {
-            const b = r.interface.takeByte() catch |err| return if ((r.err orelse err) == error.Canceled) error.Canceled else err;
-            header_buf[header_len] = b;
-            header_len += 1;
-            if (header_len >= 4 and std.mem.eql(u8, header_buf[header_len - 4 .. header_len], "\r\n\r\n")) break;
-        }
-
-        const resp = header_buf[0..header_len];
-        if (!std.mem.startsWith(u8, resp, "HTTP/1.1 101")) {
-            return error.WebSocketUpgradeFailed;
-        }
-        var valid_accept = false;
-        var lines = std.mem.splitSequence(u8, resp, "\r\n");
-        while (lines.next()) |line| {
-            const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
-            if (std.ascii.eqlIgnoreCase(line[0..colon], "Sec-WebSocket-Accept"))
-                valid_accept = std.mem.eql(u8, std.mem.trim(u8, line[colon + 1 ..], " \t"), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
-        }
-        if (!valid_accept) return error.WebSocketUpgradeFailed;
-
-        return WsSession{
-            .stream = stream,
-            .io = self.io,
-            .alloc = self.alloc,
-        };
+        const url = try temp.print("ws://127.0.0.1:{d}{s}", .{ self.port, path });
+        const connection = try ws.Connection.connect(self.alloc, self.io, .{ .tcp = url }, .{ .max_message_bytes = WsSession.max_message_bytes });
+        return .{ .io = self.io, .alloc = self.alloc, .stream = connection.stream, .transport = connection };
     }
 };
 
@@ -823,6 +684,7 @@ test "wire reads tolerate early poll expiry without extending the deadline" {
         time_ms: i64 = 0,
         polls: usize = 0,
         expire: bool = false,
+        fn close(_: ?*anyopaque, _: []const std.Io.net.Socket) void {}
         fn now(ctx: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
             const self: *@This() = @ptrCast(@alignCast(ctx.?));
             return .{ .nanoseconds = @as(i96, self.time_ms) * std.time.ns_per_ms };
@@ -836,8 +698,8 @@ test "wire reads tolerate early poll expiry without extending the deadline" {
             }
             const index = batch.submitted.head;
             const slot = &batch.storage[index.toIndex()];
-            slot.submission.operation.net_read.data[0][0] = 'x';
-            slot.* = .{ .completion = .{ .node = .{ .next = .none }, .result = .{ .net_read = .{ .data_len = 1, .control_len = 0 } } } };
+            @memcpy(slot.submission.operation.net_read.data[0][0..3], "\x81\x01x");
+            slot.* = .{ .completion = .{ .node = .{ .next = .none }, .result = .{ .net_read = .{ .data_len = 3, .control_len = 0 } } } };
             batch.submitted = .{ .head = .none, .tail = .none };
             batch.completed = .{ .head = index, .tail = index };
         }
@@ -845,28 +707,66 @@ test "wire reads tolerate early poll expiry without extending the deadline" {
     var fake: Fake = .{};
     var vtable = std.testing.io.vtable.*;
     vtable.now = Fake.now;
+    vtable.netClose = Fake.close;
     vtable.batchAwaitConcurrent = Fake.awaitPoll;
     var socket: WsSession = .{ .alloc = std.testing.allocator, .io = .{ .userdata = &fake, .vtable = &vtable }, .stream = undefined, .deadline_ms = 10 };
     socket.stream.socket.handle = -1;
-    var byte: [1]u8 = undefined;
-    try socket.readExact(&byte);
-    try std.testing.expectEqualStrings("x", &byte);
+    const message = try socket.receiveRaw();
+    defer socket.alloc.free(message);
+    try std.testing.expectEqualStrings("x", message);
     try std.testing.expectEqual(@as(usize, 2), fake.polls);
     fake = .{ .expire = true };
-    try std.testing.expectError(error.Timeout, socket.readExact(&byte));
+    try std.testing.expectError(error.Timeout, socket.receiveRaw());
     try std.testing.expectEqual(@as(usize, 2), fake.polls);
     try std.testing.expectEqual(@as(i64, 10), fake.time_ms);
 }
 
 test "canceled websocket writes preserve cancellation for their owner" {
     const Fake = struct {
-        fn operate(_: ?*anyopaque, _: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+        fn close(_: ?*anyopaque, _: []const std.Io.net.Socket) void {}
+        fn awaitPoll(_: ?*anyopaque, _: *std.Io.Batch, _: std.Io.Timeout) std.Io.Batch.AwaitConcurrentError!void {
             return error.Canceled;
         }
     };
     var vtable = std.testing.io.vtable.*;
-    vtable.operate = Fake.operate;
+    vtable.batchAwaitConcurrent = Fake.awaitPoll;
+    vtable.netClose = Fake.close;
     var socket: WsSession = .{ .alloc = std.testing.allocator, .io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable }, .stream = undefined };
     socket.stream.socket.handle = -1;
     try std.testing.expectError(error.Canceled, socket.sendRaw("{}"));
+}
+
+test "shared transport preserves reply and queued event ownership across allocator changes" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var server = try (std.Io.net.IpAddress{ .ip4 = .loopback(0) }).listen(io, .{});
+    defer server.deinit(io);
+    const client = try server.socket.address.connect(io, .{ .mode = .stream });
+    var session: WsSession = .{ .stream = client, .io = io, .alloc = arena.allocator() };
+    defer session.close();
+    const peer = try server.accept(io);
+    defer peer.close(io);
+    var buffer: [512]u8 = undefined;
+    var writer = peer.writer(io, &buffer);
+    const event = "{\"method\":\"Page.loadEventFired\",\"sessionId\":\"tab\"}";
+    const first = "{\"id\":1,\"sessionId\":\"tab\",\"result\":{}}";
+    const second = "{\"id\":2,\"result\":{}}";
+    inline for (.{ event, first, second }) |message| {
+        try writer.interface.writeAll(&.{ 0x81, message.len });
+        try writer.interface.writeAll(message);
+    }
+    try writer.interface.flush();
+    const reply = try session.callSession("tab", "Page.enable", null);
+    try std.testing.expectEqualStrings(first, reply);
+    session.alloc.free(reply);
+    try session.setAllocator(std.testing.allocator);
+    _ = arena.reset(.free_all);
+    const queued = session.takeEvent() orelse return error.MissingEvent;
+    defer std.testing.allocator.free(queued);
+    try std.testing.expectEqualStrings(event, queued);
+    const next = try session.call("Browser.getVersion", null);
+    defer std.testing.allocator.free(next);
+    try std.testing.expectEqualStrings(second, next);
+    try std.testing.expect(session.takeEvent() == null);
 }

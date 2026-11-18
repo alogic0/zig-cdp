@@ -8,17 +8,22 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     if (target.result.os.tag != .linux) @panic("zig-cdp currently supports Linux only");
     const process = b.dependency("process", .{ .target = target, .optimize = optimize });
+    const ws = b.dependency("zig_ws", .{ .target = target, .optimize = optimize }).module("ws");
+    const imports: []const std.Build.Module.Import = &.{
+        .{ .name = "process", .module = process.module("process") },
+        .{ .name = "ws", .module = ws },
+    };
     const cdp = b.addModule("cdp", .{
         .root_source_file = b.path("src/cdp.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "process", .module = process.module("process") }},
+        .imports = imports,
     });
     const tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/cdp_journey_test.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "process", .module = process.module("process") }},
+        .imports = imports,
     }) });
     const test_step = b.step("test", "Run native CDP and owned-browser tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
