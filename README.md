@@ -10,7 +10,7 @@ and the WebSocket transport comes from [zig-ws](https://github.com/alogic0/zig-w
 The manifest pins a Git revision and package hash for each.
 Node.js and a browser-driver service are not required.
 
-Version **0.5.2**, licensed under the [MIT License](LICENSE).
+Version **0.5.3**, licensed under the [MIT License](LICENSE).
 
 ## Install
 

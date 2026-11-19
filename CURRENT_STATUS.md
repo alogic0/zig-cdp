@@ -1,5 +1,12 @@
 # Current delivery
 
+## GitHub package dependencies (0.5.3), November 19, 2026
+
+The manifest pins the HTTP fixture, test support, process library and WebSocket
+transport by GitHub commit and Zig package hash. Test support 0.2.0 and the
+runtime share process 0.6.1. Run `zig build --fetch=all` to populate the
+package cache for an offline build.
+
 ## Background viewport cleanup corrected (0.5.1), November 16, 2026
 
 The [regression plan](docs/plans/2026-11-16-background-viewport-cleanup.md)

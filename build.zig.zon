@@ -1,25 +1,25 @@
 .{
     .name = .zig_cdp,
-    .version = "0.5.2",
+    .version = "0.5.3",
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .http_fixture = .{
-            .url = "file:vendor/zig-http-fixture-b51873725fecd7936078e64026b6ea664783773e.tar.gz",
+            .url = "git+https://github.com/alogic0/zig-http-fixture.git#b51873725fecd7936078e64026b6ea664783773e",
             .hash = "http_fixture-0.2.1-FEx3WHtDAQAw_rDcdJV2y3jHnhkNv4dpO4s4sxccS1sh",
         },
         .test_support = .{
-            .url = "file:vendor/zig-test-support-e23cb642765677807c2e80f613fb873f9780554a.tar.gz",
-            .hash = "test_support-0.1.0-WfGxyoRFAQDhhlTotTZ_-3SC6mWmQZIvxFQBcFXQm5NI",
+            .url = "git+https://github.com/alogic0/zig-test-support.git#5bb89e9cc406a1e2a0232520abec71a9ed4f91d7",
+            .hash = "test_support-0.2.0-WfGxyqg_AQBnOS-xq3mjLS5VrG7qrNgA6JPBkTxoD6Sp",
         },
         .process = .{
-            .url = "git+https://github.com/alogic0/zig-process.git#4826a4973b20b65ded5f0fb79d5eb49694024398",
-            .hash = "process-0.5.1-BnTYqEE4AgB9ILj1BL2rdfggzRIWzFNVP7lO_MFvVZl8",
+            .url = "git+https://github.com/alogic0/zig-process.git#e9fcfccecc84f44a362b12de1bee78258b1e811f",
+            .hash = "process-0.6.1-BnTYqMjtAgBVigoM1rPejjGnCcLGv25lTJpl9MH9pLzf",
         },
         .zig_ws = .{
-            .url = "git+https://github.com/alogic0/zig-ws.git#deb93db8db3a93b557f1a77325f7aa6237da9fa7",
-            .hash = "zig_ws-0.1.0-N-N8fM4JAQANyprGD3s-RfXQZYtLsoAggmXSoNgJW_lt",
+            .url = "git+https://github.com/alogic0/zig-ws.git#a22081ef2e375bde6a8708adf5e76a8cc0036cac",
+            .hash = "zig_ws-0.1.0-N-N8fK8GAQCmVuZEw4cjQFDbOu8jB-guJRaYSwsKKFBr",
         },
     },
-    .paths = .{ "build.zig", "build.zig.zon", ".zigversion", "src", "tests", "examples", "docs", "vendor", "LICENSE", "README.md", "DESIGN.md", "CURRENT_STATUS.md", "AGENTS.md" },
+    .paths = .{ "build.zig", "build.zig.zon", ".zigversion", "src", "tests", "examples", "docs", "LICENSE", "README.md", "DESIGN.md", "CURRENT_STATUS.md", "AGENTS.md" },
     .fingerprint = 0x59f610c6ec197bfc,
 }
