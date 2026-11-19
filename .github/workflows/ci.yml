@@ -74,18 +74,14 @@ jobs:
           zig build test -Doptimize=${{ matrix.optimize }} --summary all
 
   test-providers:
-    name: ${{ matrix.provider.name }} (${{ matrix.optimize }})
+    name: ${{ matrix.provider }} (${{ matrix.optimize }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         optimize: [Debug, ReleaseSafe]
-        provider:
-          - name: http_fixture
-            archive: vendor/zig-http-fixture-b51873725fecd7936078e64026b6ea664783773e.tar.gz
-          - name: test_support
-            archive: vendor/zig-test-support-e23cb642765677807c2e80f613fb873f9780554a.tar.gz
+        provider: [http_fixture, test_support]
     steps:
       - name: Check out sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,16 +96,31 @@ jobs:
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: ${{ steps.zig-version.outputs.version }}
-          cache-key: ${{ matrix.provider.name }}-${{ matrix.optimize }}
+          cache-key: ${{ matrix.provider }}-${{ matrix.optimize }}
 
-      - name: Unpack the pinned provider archive
+      - name: Fetch the provider pinned in the package manifest
         id: provider
-        shell: bash
+        shell: python
+        env:
+          PROVIDER: ${{ matrix.provider }}
         run: |
-          provider_dir=$(mktemp -d)
-          tar -xzf "${{ matrix.provider.archive }}" -C "$provider_dir"
-          cmp .zigversion "$provider_dir/.zigversion"
-          echo "root=$provider_dir" >> "$GITHUB_OUTPUT"
+          import os, re, subprocess
+          from pathlib import Path
+
+          name = os.environ["PROVIDER"]
+          manifest = Path("build.zig.zon").read_text()
+          entry = re.search(rf"\.{re.escape(name)}\s*=\s*\.\{{([^}}]*)\}}", manifest)
+          if entry is None:
+              raise SystemExit(f"Missing dependency {name} in build.zig.zon")
+          pin = dict(re.findall(r'\.(url|hash)\s*=\s*"([^"]+)"', entry[1]))
+          subprocess.run(["zig", "build", "--fetch=all"], check=True)
+          packages = Path(os.environ.get("ZIG_LOCAL_PKG_DIR", "zig-pkg"))
+          root = (packages / pin["hash"]).resolve(strict=True)
+          if (root / ".zigversion").read_bytes() != Path(".zigversion").read_bytes():
+              raise SystemExit(f"Zig version mismatch for {name}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print(f"root={root}", file=output)
+              print(f"url={pin['url']}", file=output)
 
       - name: Test provider and example
         working-directory: ${{ steps.provider.outputs.root }}
@@ -117,11 +128,14 @@ jobs:
 
       - name: Test isolated immutable package consumer
         shell: bash
+        env:
+          PROVIDER: ${{ matrix.provider }}
+          PROVIDER_ROOT: ${{ steps.provider.outputs.root }}
+          PROVIDER_URL: ${{ steps.provider.outputs.url }}
         run: |
           consumer_dir=$(mktemp -d)
-          cp "${{ matrix.provider.archive }}" "$consumer_dir/provider.tar.gz"
-          cp "${{ steps.provider.outputs.root }}/tests/package/"* "$consumer_dir/"
+          cp "$PROVIDER_ROOT/tests/package/"* "$consumer_dir/"
           export ZIG_GLOBAL_CACHE_DIR="$consumer_dir/cache"
           cd "$consumer_dir"
-          zig fetch --save=${{ matrix.provider.name }} file:provider.tar.gz
+          zig fetch --save="$PROVIDER" "$PROVIDER_URL"
           zig build test -Doptimize=${{ matrix.optimize }} --summary all
